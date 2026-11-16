@@ -1,5 +1,5 @@
-// Offline cache for Öl WG Darts Trainer. Version 20261116090548
-const CACHE = "oelwg-darts-20261116090548";
+// Offline cache for Öl WG Darts Trainer. Version 20261116090951
+const CACHE = "oelwg-darts-20261116090951";
 const CORE = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });

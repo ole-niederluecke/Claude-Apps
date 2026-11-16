@@ -146,13 +146,16 @@ input{font:inherit;color:var(--fg)}
 .shead{display:flex;align-items:center;gap:6px;margin-left:-8px}
 .panel.tight{padding:12px 14px;gap:10px}
 .opts{display:flex;flex-direction:column}
-.opts .opt{flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 12px;padding:7px 0;border-top:1px solid var(--line)}
+.opts .opt{display:grid;grid-template-columns:minmax(92px,30%) minmax(0,1fr);align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line)}
+.opts .opt.wide{grid-template-columns:minmax(0,1fr);gap:6px}
 .opts .opt:first-child{border-top:0;padding-top:0}
 .opts .opt-label{font-size:14px;color:var(--fg)}
-.opts .seg{gap:4px;justify-content:flex-end}
-.opts .seg button{min-height:34px;padding:5px 10px;font-size:13.5px;border-radius:8px}
-.opts .stepper button{width:36px;height:34px;font-size:18px}
-.opts .stepper output{min-width:50px;font-size:19px}
+/* every control fills the same column, options share it equally */
+.opts .seg{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:4px;width:100%}
+.opts .seg button{min-height:36px;padding:5px 4px;font-size:13.5px;border-radius:8px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.opts .stepper{display:grid;grid-template-columns:44px minmax(0,1fr) 44px;width:100%;align-self:auto}
+.opts .stepper button{width:auto;height:36px;font-size:18px}
+.opts .stepper output{min-width:0;font-size:19px}
 .tight .chips{gap:6px}
 .tight .chip{min-height:36px;padding:5px 12px 5px 7px;font-size:14px}
 .tight .field{min-height:38px;padding:7px 10px}
@@ -436,6 +439,7 @@ let S = lsGet(LS_DATA) || {players:[], history:[], tournaments:[]};
 S.players ||= []; S.history ||= []; S.tournaments ||= [];
 let G = lsGet(LS_GAME);
 const prefs = lsGet(LS_PREFS) || {};
+if (prefs.setupV !== 2) { delete prefs.setup; prefs.setupV = 2; lsSet(LS_PREFS, prefs); }
 let UI = {view: "play", mode: null, setup: {}, sel: prefs.sel || [], kp: "", mult: 1, modal: null,
   cmp: prefs.cmp || [], statsCat: "multi", trainSolo: "all", tId: null, editP: null, bo: null,
   tf: {name:"", format:"ko", sel:[], start:501, outRule:"double", legs:2, shuffle:"yes", twice:"no", startMode:"bull"}};
@@ -581,11 +585,11 @@ const RULES = {
     <h4>Eingabe</h4><p>Nach jeder Aufnahme trägst du die Punkte ein, die auf dem Ziel gelandet sind. 0 heißt: halbieren.</p>
     <h4>Sieg</h4><p>Nach der neunten Runde gewinnt, wer die meisten Punkte hat. Allein gespielt ist es ein gutes Training für Konstanz über das ganze Board.</p>`,
 };
-const RANKS_OPT = {k:"ranks", label:"Platzierungen", type:"seg", vals:[["no","Ende beim Sieger"],["yes","Ja, ausspielen"]], minPlayers:3};
+const RANKS_OPT = {k:"ranks", label:"Platzierungen", type:"seg", vals:[["no","Nein"],["yes","Ja"]], minPlayers:3};
 const DEFAULTS = {
-  x01:{start:501, outRule:"double", inRule:"straight", legs:3, sets:1, input:"visit", dblTrack:"yes", ranks:"no", startMode:"order"},
+  x01:{start:501, outRule:"double", inRule:"straight", legs:1, sets:1, input:"visit", dblTrack:"yes", ranks:"no", startMode:"order"},
   halveit:{startMode:"order"},
-  cricket:{variant:"standard", rounds:20, ranks:"no", startMode:"order"},
+  cricket:{variant:"standard", rounds:0, ranks:"no", startMode:"order"},
   atc:{variant:"single", bull:"yes", ranks:"no", startMode:"order"},
   bobs27:{startMode:"order"},
   shanghai:{rounds:7, startMode:"order"},
@@ -601,7 +605,7 @@ const OPTS = {
     {k:"legs", label:"Legs (first to)", type:"step", min:1, max:11},
     {k:"sets", label:"Sets (first to)", type:"step", min:1, max:7, fmt:v => v === 1 ? "ohne" : v},
     INPUT_OPT,
-    {k:"dblTrack", label:"CO-Quote abfragen", type:"seg", vals:[["yes","Ja"],["no","Nein"]], show: st => st.input === "visit" && st.outRule !== "straight"},
+    {k:"dblTrack", label:"CO-Quote", type:"seg", vals:[["yes","Ja"],["no","Nein"]], show: st => st.input === "visit" && st.outRule !== "straight"},
     RANKS_OPT,
   ],
   halveit:[],
@@ -617,14 +621,14 @@ const OPTS = {
   ],
   bobs27:[],
   shanghai:[{k:"rounds", label:"Zahlen", type:"seg", vals:[[7,"1 bis 7"],[20,"1 bis 20"]]}],
-  score:[{k:"rounds", label:"Aufnahmen", type:"seg", vals:[[10,"10"],[20,"20"],[33,"33 (99 Darts)"]]}, INPUT_OPT],
+  score:[{k:"rounds", label:"Aufnahmen", type:"seg", vals:[[10,"10"],[20,"20"],[33,"33"]]}, INPUT_OPT],
   c121:[
     {k:"start", label:"Startziel", type:"seg", vals:[[61,"61"],[81,"81"],[121,"121"]]},
     {k:"attempts", label:"Versuche", type:"seg", vals:[[5,"5"],[10,"10"],[20,"20"]]},
     INPUT_OPT,
   ],
 };
-const START_OPT = {k:"startMode", label:"Wer beginnt?", type:"seg", vals:[["order","Reihenfolge"],["bull","Ausbullen"],["random","Zufall"]]};
+const START_OPT = {k:"startMode", label:"Wer beginnt?", wide: true, type:"seg", vals:[["order","Reihenfolge"],["bull","Ausbullen"],["random","Zufall"]]};
 const OUT_LABEL = {double:"Double Out", master:"Master Out", straight:"Single Out"};
 
 /* ================= Game core ================= */
@@ -1372,7 +1376,7 @@ function viewPlay(){
     <section><h2 class="h2">Turnier</h2><div class="modes short"><button class="mode match short" style="grid-column:1/-1" data-act="go" data-v="tnew"><span class="mode-name">Turnier erstellen</span></button></div></section>`;
 }
 function optHTML(o, val, prefix = "setOpt"){
-  if (o.type === "seg") return `<div class="opt"><span class="opt-label">${o.label}</span><div class="seg">${o.vals.map(([v, l]) => `<button class="${String(val) === String(v) ? "on" : ""}" aria-pressed="${String(val) === String(v)}" data-act="${prefix}" data-k="${o.k}" data-v="${v}">${l}</button>`).join("")}</div></div>`;
+  if (o.type === "seg") return `<div class="opt ${o.wide ? "wide" : ""}"><span class="opt-label">${o.label}</span><div class="seg">${o.vals.map(([v, l]) => `<button class="${String(val) === String(v) ? "on" : ""}" aria-pressed="${String(val) === String(v)}" data-act="${prefix}" data-k="${o.k}" data-v="${v}">${l}</button>`).join("")}</div></div>`;
   return `<div class="opt"><span class="opt-label">${o.label}</span><div class="stepper"><button data-act="${prefix}" data-k="${o.k}" data-step="-1" aria-label="weniger" ${val <= o.min ? "disabled" : ""}>−</button><output class="num">${o.fmt ? o.fmt(val) : val}</output><button data-act="${prefix}" data-k="${o.k}" data-step="1" aria-label="mehr" ${val >= o.max ? "disabled" : ""}>+</button></div></div>`;
 }
 function playerPicker(sel, act, max){
