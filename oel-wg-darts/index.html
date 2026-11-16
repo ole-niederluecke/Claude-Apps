@@ -128,6 +128,8 @@ input{font:inherit;color:var(--fg)}
 .mode:active{transform:scale(.985)}
 .mode-name{font-family:var(--display);font-weight:700;font-size:26px;line-height:1.05}
 .mode-desc{color:var(--muted);font-size:13.5px}
+.modes.short{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+.mode.short{min-height:0;padding:12px 16px}
 .mode.match .mode-name{color:var(--red)}
 .mode.train .mode-name{color:var(--green)}
 
@@ -312,8 +314,14 @@ button.pc{cursor:pointer}
 .mk{width:30px;height:30px;color:var(--fg)}
 .mk.c{color:var(--green)}
 
-.pad{flex:none;background:var(--surface);border-top:1px solid var(--line);padding-block:8px 12px}
-.pad .wrap{display:flex;flex-direction:column;gap:7px}
+.pad{flex:1 0 auto;display:flex;flex-direction:column;background:var(--surface);border-top:1px solid var(--line);padding-block:8px 12px}
+.pad .wrap{flex:1;display:flex;flex-direction:column;gap:7px}
+.game .board{flex:0 1 auto}
+/* the keys grow into free height (capped), so there is no empty gap above the input */
+.pad .kgrid,.pad .dkeys{flex:1;grid-auto-rows:minmax(44px,1fr);max-height:400px}
+.pad .kgrid button,.pad .dkeys button{height:auto}
+.pad .bigkeys,.pad .kpad{flex:1;grid-auto-rows:minmax(64px,1fr);max-height:260px}
+.pad .bigkeys button{height:auto}
 .padtop{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:32px}
 .padtop .whose{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .kdisp{display:flex;gap:6px}
@@ -544,7 +552,7 @@ const RULES = {
     <h4>Bust (überworfen)</h4><p>Wirfst du mehr als deinen Rest, bleibt bei Double Out ein Rest von 1 übrig oder triffst du null nicht mit einem Doppel, ist die Aufnahme ungültig. Dein Rest springt auf den Stand vor der Aufnahme zurück.</p>
     <h4>Check-in</h4><p>Bei <b>Double In</b> zählen deine Punkte erst ab dem ersten Doppel. Bei Single In zählt jeder Dart sofort.</p>
     <h4>Legs und Sets</h4><p>„First to 3“ heißt: Wer zuerst drei Legs gewinnt, gewinnt das Spiel. Mit Sets braucht man für einen Satz die eingestellten Legs, für den Sieg die eingestellten Sätze. Der Anwurf wechselt jedes Leg. Der Punkt ● neben dem Namen zeigt, wer das Leg begonnen hat.</p>
-    <h4>Hilfen in der App</h4><ul><li>Ab 170 Rest zeigt die App einen Checkout-Weg an, z. B. T20 · T20 · Bull bei 170.</li><li>Vor dem Spiel wählst du, ob du die Summe einer Aufnahme eingibst oder jeden Dart einzeln.</li><li>Bei der Summe kannst du statt der Punkte auch deinen neuen Rest eintippen und auf „Restscore“ drücken. Stehst du auf 301, wirfst 32 und tippst 269 und „Restscore“, zieht die App die 32 automatisch ab.</li><li><b>Checkout-Quote (CO%):</b> Gecheckte Legs geteilt durch alle Darts, die aufs Doppel gingen. Aufs Doppel wirft man erst ab 50 Rest oder weniger. Bei der Einzeldart-Eingabe zählt die App das selbst mit, bei der Summe fragt sie nur nach, wenn du die Aufnahme mit 50 oder weniger begonnen hast oder gerade gecheckt hast.</li><li>Mit „Platzierungen ausspielen“ spielen die übrigen weiter, wenn jemand fertig ist, bis alle Plätze feststehen.</li></ul>`,
+    <h4>Hilfen in der App</h4><ul><li>Ab 170 Rest zeigt die App einen Checkout-Weg an, z. B. T20 · T20 · Bull bei 170.</li><li>Vor dem Spiel wählst du, ob du die Summe einer Aufnahme eingibst oder jeden Dart einzeln.</li><li>Bei der Summe kannst du statt der Punkte auch deinen neuen Rest eintippen und auf „Restscore“ drücken. Stehst du auf 301, wirfst 32 und tippst 269 und „Restscore“, zieht die App die 32 automatisch ab.</li><li><b>Checkout-Quote (CO%):</b> Gecheckte Legs geteilt durch alle Darts, die aufs Doppel gingen. Aufs Doppel wirft man erst ab 50 Rest oder weniger. Bei der Einzeldart-Eingabe zählt die App das selbst mit, bei der Summe rechnet sie aus, wie viele Darts aufs Doppel überhaupt möglich waren. Ist die Antwort eindeutig, zählt sie automatisch. Sonst fragt sie nach und bietet nur die möglichen Zahlen an. Wer etwa von 170 mit 120 Punkten auf 50 kommt, kann den dritten Dart aufs Bull geworfen haben. Bei 100 Punkten von 170 ist das nicht möglich.</li><li>Mit „Platzierungen ausspielen“ spielen die übrigen weiter, wenn jemand fertig ist, bis alle Plätze feststehen.</li></ul>`,
   cricket: `<p>Gespielt wird nur auf die Felder <b>15, 16, 17, 18, 19, 20</b> und das <b>Bull</b>. Jedes Feld musst du dreimal treffen, um es zu <b>schließen</b>.</p>
     <ul><li>Single = 1 Treffer, Double = 2, Triple = 3. Ein T20 schließt die 20 also auf einen Schlag.</li><li>Beim Bull zählt das äußere Bull (25) einfach, das innere Bull doppelt.</li><li>Auf der Tafel steht ein Strich für einen Treffer, ein Kreuz für zwei und ein Kreuz im Kreis für ein geschlossenes Feld.</li></ul>
     <h4>Punkte</h4><p>Hast du ein Feld geschlossen und mindestens ein Gegner noch nicht, bringt jeder weitere Treffer dort Punkte in Höhe des Feldes. Ein T20 auf eine geschlossene 20 bringt also 60 Punkte. Haben alle das Feld geschlossen, ist es „tot“ und wird ausgegraut.</p>
@@ -1355,13 +1363,13 @@ const TAB_OF = {play:"play", setup:"play", bulloff:"play", players:"players", st
 
 function viewPlay(){
   const resume = G && !G.finished ? `<div class="resume"><div style="flex:1;min-width:0"><b>${esc(MODES[G.mode].name)} läuft noch</b><span class="small muted">${esc(G.names.join(" gegen "))}</span></div><button class="btn btn-green" data-act="resume">Weiterspielen</button></div>` : "";
-  const card = id => { const M = MODES[id]; return `<button class="mode ${M.group}" data-act="pickMode" data-v="${id}"><span class="mode-name">${esc(M.name)}</span>${M.desc ? `<span class="mode-desc">${esc(M.desc)}</span>` : ""}</button>`; };
+  const card = id => { const M = MODES[id]; return `<button class="mode ${M.group} ${M.desc ? "" : "short"}" data-act="pickMode" data-v="${id}"><span class="mode-name">${esc(M.name)}</span>${M.desc ? `<span class="mode-desc">${esc(M.desc)}</span>` : ""}</button>`; };
   const ids = Object.keys(MODES);
   return `${resume}
     <div class="ring" aria-hidden="true">20 1 18 4 13 6 10 15 2 17 3 19 7 16 8 11 14 9 12 5 20 1 18 4 13 6 10 15 2 17 3 19 7 16 8 11 14 9 12 5</div>
-    <section><h2 class="h2">Matchspiele</h2><div class="modes">${ids.filter(i => MODES[i].group === "match").map(card).join("")}</div></section>
+    <section><h2 class="h2">Matchspiele</h2><div class="modes short">${ids.filter(i => MODES[i].group === "match").map(card).join("")}</div></section>
     <section><h2 class="h2">Training</h2><div class="modes">${ids.filter(i => MODES[i].group === "train").map(card).join("")}</div></section>
-    <section><h2 class="h2">Turnier</h2><div class="modes"><button class="mode match" data-act="go" data-v="tnew"><span class="mode-name">Turnier erstellen</span></button></div></section>`;
+    <section><h2 class="h2">Turnier</h2><div class="modes short"><button class="mode match short" style="grid-column:1/-1" data-act="go" data-v="tnew"><span class="mode-name">Turnier erstellen</span></button></div></section>`;
 }
 function optHTML(o, val, prefix = "setOpt"){
   if (o.type === "seg") return `<div class="opt"><span class="opt-label">${o.label}</span><div class="seg">${o.vals.map(([v, l]) => `<button class="${String(val) === String(v) ? "on" : ""}" aria-pressed="${String(val) === String(v)}" data-act="${prefix}" data-k="${o.k}" data-v="${v}">${l}</button>`).join("")}</div></div>`;
@@ -1553,17 +1561,19 @@ function renderModal(){
   const el = $("#modal"), m = UI.modal;
   if (!m) { el.innerHTML = ""; return; }
   let h = "";
+  const pick = (act, lo, hi, label) => `<div class="bigkeys" style="grid-template-columns:repeat(${hi - lo + 1},1fr)">${Array.from({length: hi - lo + 1}, (_, i) => lo + i).map(k => `<button class="${k ? "hit" : ""}" data-act="${act}" data-v="${k}">${k}<small>${label(k)}</small></button>`).join("")}</div>`;
   if (m.type === "coDarts" && m.d == null) {
     h = `<h2>Check-out ${m.v}!</h2><p class="muted" style="margin:0">Mit wie vielen Darts insgesamt? Das zählt für Average und bestes Leg.</p>
-      <div class="bigkeys" style="grid-template-columns:repeat(${4 - m.min},1fr)">${[1,2,3].filter(d => d >= m.min).map(d => `<button class="hit" data-act="coD" data-v="${d}">${d}<small>${d === 1 ? "Dart" : "Darts"}</small></button>`).join("")}</div>
+      <div class="bigkeys" style="grid-template-columns:repeat(${m.ds.length},1fr)">${m.ds.map(d => `<button class="hit" data-act="coD" data-v="${d}">${d}<small>${d === 1 ? "Dart" : "Darts"}</small></button>`).join("")}</div>
       <button class="btn btn-quiet" data-act="closeModal">Abbrechen</button>`;
   } else if (m.type === "coDarts") {
-    h = `<h2>Check-out ${m.v}!</h2><p class="muted" style="margin:0">Wie viele dieser ${m.d} Darts gingen aufs Doppel? Den Treffer mitgezählt.</p>
-      <div class="bigkeys" style="grid-template-columns:repeat(${m.d - (m.setup || 0)},1fr)">${Array.from({length: m.d - (m.setup || 0)}, (_, i) => i + 1).map(k => `<button class="hit" data-act="coDbl" data-v="${k}">${k}<small>aufs Doppel</small></button>`).join("")}</div>
+    const [lo, hi] = m.ranges[m.d];
+    h = `<h2>Check-out ${m.v}!</h2><p class="muted" style="margin:0">Wie viele der ${m.d} Darts gingen aufs Doppel? Der Treffer zählt mit.</p>
+      ${pick("coDbl", lo, hi, () => "aufs Doppel")}
       <button class="btn btn-quiet" data-act="closeModal">Abbrechen</button>`;
   } else if (m.type === "dbl") {
-    h = `<h2>${m.v} Punkte</h2><p class="muted" style="margin:0">Wie viele Darts gingen aufs Doppel? Das braucht die App für die Checkout-Quote.</p>
-      <div class="bigkeys" style="grid-template-columns:repeat(${m.max + 1},1fr)">${Array.from({length: m.max + 1}, (_, k) => `<button class="${k ? "hit" : ""}" data-act="dblAtt" data-v="${k}">${k}<small>${k === 1 ? "Dart" : "Darts"}</small></button>`).join("")}</div>
+    h = `<h2>${m.v ? m.v + " Punkte" : "0 Punkte / Bust"}</h2><p class="muted" style="margin:0">Wie viele Darts gingen aufs Doppel? Das braucht die App für die Checkout-Quote.</p>
+      ${pick("dblAtt", m.lo, m.hi, k => k === 1 ? "Dart" : "Darts")}
       <button class="btn btn-quiet" data-act="closeModal">Abbrechen</button>`;
   } else if (m.type === "quit") {
     h = `<h2>Spiel unterbrechen?</h2><div class="stack"><button class="btn btn-green btn-lg" data-act="closeModal">Weiterspielen</button>
@@ -1610,19 +1620,47 @@ function kpSubmit(v){
   }
   if (v > 180 || !POSSIBLE.has(v)) { toast(v + " ist mit drei Darts nicht möglich"); UI.kp = ""; render(); return; }
   if (G.mode === "x01") {
-    const p = G.p[G.cur], st = G.settings, out = st.outRule;
+    const p = G.p[G.cur], st = G.settings, out = st.outRule, R = p.rem, nr = R - v;
     const track = out !== "straight" && st.dblTrack !== "no";
-    const route = checkout(p.rem, 3, out);
-    if (p.rem - v === 0 && route) {
-      const setup = route.length - 1;   /* darts needed before the finishing dart */
-      if (route.length < 3 || (track && 3 - setup > 1)) { UI.modal = {type: "coDarts", v, min: route.length, setup, track, d: route.length === 3 ? 3 : null}; render(); return; }
-      act(() => x01ApplyVisit(v, 3, track ? 1 : 0)); return;
+    const bust = nr < 0 || (out !== "straight" && nr === 1) || (nr === 0 && !checkout(v, 3, out));
+    const T = dblTable(R, out);
+    const range = k => (track && T.get(k)) || [0, 0];
+    if (nr === 0 && !bust) {
+      const ds = [1, 2, 3].filter(d => T.has("co|" + d));
+      const ranges = Object.fromEntries(ds.map(d => [d, range("co|" + d)]));
+      if (ds.length === 1 && ranges[ds[0]][0] === ranges[ds[0]][1]) { const d = ds[0]; act(() => x01ApplyVisit(v, d, ranges[d][0])); return; }
+      UI.modal = {type: "coDarts", v, ds, ranges, d: ds.length === 1 ? ds[0] : null}; render(); return;
     }
-    /* Darts at a double only happen from 50 or less (D20 down to D1, or Bull) */
-    if (track && route && p.rem <= 50) { UI.modal = {type: "dbl", v, max: 4 - route.length}; render(); return; }
-    act(() => x01ApplyVisit(v, 3, 0));
+    const [lo, hi] = range(bust ? "0" : String(v));
+    if (lo === hi) { act(() => x01ApplyVisit(v, 3, lo)); return; }
+    UI.modal = {type: "dbl", v, lo, hi}; render(); return;
   } else if (G.mode === "score") act(() => scoreVisit(v));
   else if (G.mode === "c121") act(() => c121Visit(v));
+}
+/* For a remaining score R, every possible visit (up to three darts, misses included) is played through once.
+   A dart counts as thrown at a double when the score before it can be finished with that one dart (40 and less
+   on an even number, or 50). For each outcome (points scored, a bust, or a checkout with 1 to 3 darts) the table
+   keeps the fewest and the most darts that can have gone at a double. */
+const dblCache = new Map();
+function dblTable(R, out){
+  const key = R + "|" + out;
+  if (dblCache.has(key)) return dblCache.get(key);
+  const T = new Map(), opts = [{n: 0, m: 1, v: 0}, ...SEGS];
+  const atDouble = r => !!checkout(r, 1, out);
+  const add = (k, a) => { const x = T.get(k); if (!x) T.set(k, [a, a]); else { if (a < x[0]) x[0] = a; if (a > x[1]) x[1] = a; } };
+  const walk = (r, d, att) => {
+    if (d === 3) { add(String(R - r), att); return; }
+    const a2 = att + (atDouble(r) ? 1 : 0);
+    for (const s of opts) {
+      const nr = r - s.v;
+      if (nr < 0 || (out !== "straight" && nr === 1) || (nr === 0 && !finOk(s, out))) { add("0", a2); continue; }
+      if (nr === 0) { add("co|" + (d + 1), a2); continue; }
+      walk(nr, d + 1, a2);
+    }
+  };
+  walk(R, 0, 0);
+  dblCache.set(key, T);
+  return T;
 }
 /* "Rest" key: the typed number is the new remaining score */
 function restSubmit(){
@@ -1660,10 +1698,9 @@ const ACT = {
   kdel(){ UI.kp = UI.kp.slice(0, -1); render(); },
   kok(){ kpSubmit(parseInt(UI.kp || "0", 10)); },
   quick(el){ kpSubmit(+el.dataset.v); },
-  coD(el){ const md = UI.modal, d = +el.dataset.v;
-    const maxD = d - (md.setup || 0);
-    if (md.track && maxD > 1) { md.d = d; render(); return; }
-    UI.modal = null; act(() => x01ApplyVisit(md.v, d, md.track ? 1 : 0)); },
+  coD(el){ const md = UI.modal, d = +el.dataset.v, [lo, hi] = md.ranges[d];
+    if (lo !== hi) { md.d = d; render(); return; }
+    UI.modal = null; act(() => x01ApplyVisit(md.v, d, lo)); },
   coDbl(el){ const md = UI.modal, k = +el.dataset.v; UI.modal = null; act(() => x01ApplyVisit(md.v, md.d, k)); },
   dblAtt(el){ const md = UI.modal, k = +el.dataset.v; UI.modal = null; act(() => x01ApplyVisit(md.v, 3, k)); },
   krest(){ restSubmit(); },
