@@ -365,9 +365,9 @@ button.pc{cursor:pointer}
 .padrow .btn{min-height:42px}
 
 /* Modal + toast */
-.scrim{position:fixed;inset:0;z-index:20;background:rgba(5,12,9,.55);display:flex;align-items:flex-end;justify-content:center}
-.sheet{background:var(--surface);width:100%;max-width:560px;border-radius:18px 18px 0 0;padding:20px max(18px,env(safe-area-inset-right,0px)) calc(20px + env(safe-area-inset-bottom,0px)) max(18px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:14px;max-height:90%;overflow-y:auto}
-@media (min-width:600px){.scrim{align-items:center}.sheet{border-radius:18px}}
+.scrim{position:fixed;inset:0;z-index:20;background:rgba(5,12,9,.55);display:flex;align-items:center;justify-content:center;padding:max(16px,env(safe-area-inset-top,0px)) 12px max(16px,env(safe-area-inset-bottom,0px))}
+.sheet{background:var(--surface);width:100%;max-width:560px;border-radius:18px;padding:20px 18px;display:flex;flex-direction:column;gap:14px;max-height:90%;overflow-y:auto}
+.sheet{border-radius:18px}
 .sheet h2{margin:0;font-family:var(--display);font-size:30px;line-height:1.05}
 .sheet .stack{display:flex;flex-direction:column;gap:8px}
 .winner{font-family:var(--display);font-size:20px;font-weight:600;color:var(--green)}
@@ -441,7 +441,7 @@ const liveHistory = () => S.history.filter(h => !h.deleted && h.res && MODES[h.m
 const STANDALONE = !!window.OELWG_STANDALONE;
 const Sync = {db:null, uid:null, status: STANDALONE ? "device" : "local", dirty:new Set(), timer:null, busy:false};
 const SYNC_TEXT = {device:"Auf diesem Gerät gespeichert", local:"Nur auf diesem Gerät", loading:"Lädt …", saving:"Speichert …", ok:"In deinem Konto gespeichert", offline:"Nicht verbunden, speichert später", full:"Speicher voll"};
-function syncHTML(){ const c = Sync.status === "ok" ? "ok" : (Sync.status === "offline" || Sync.status === "full") ? "warn" : ""; return `<div id="sync" class="sync ${c}">${SYNC_TEXT[Sync.status]}</div>`; }
+function syncHTML(){ const c = Sync.status === "ok" ? "ok" : (Sync.status === "offline" || Sync.status === "full") ? "warn" : ""; return `<div id="sync" class="sync ${c}">${SYNC_TEXT[Sync.status]}${Sync.status === "offline" && Sync.lastError ? " · Grund: " + esc(Sync.lastError) : ""}</div>`; }
 const syncCls = () => Sync.status === "ok" || Sync.status === "device" ? "ok" : (Sync.status === "offline" || Sync.status === "full") ? "warn" : "";
 function setSync(s){ Sync.status = s; const el = $("#sync"); if (el) el.outerHTML = syncHTML(); const d = $("#syncdot"); if (d) d.className = "dot " + syncCls(); }
 function save(keys){
@@ -468,10 +468,12 @@ async function pushRemote(){
         await ref.set({games: S.history.filter(h => monthKey(h.date) === k)});
       }
       lsSet(LS_DATA, S);
-    } catch (e) { Sync.dirty.add(k); failed = e; break; }
+    } catch (e) { Sync.dirty.add(k); failed = e; Sync.lastError = (e && (e.code || e.message)) || String(e); break; }
   }
   Sync.busy = false;
   setSync(failed ? (failed.code === "quota_exceeded" ? "full" : "offline") : "ok");
+  if (failed) toast("Speichern im Konto fehlgeschlagen (" + Sync.lastError + "). Es wird erneut versucht.");
+  else Sync.lastError = null;
 }
 function mergeList(local, remote){
   const map = new Map(); let localNewer = false;
@@ -1400,13 +1402,16 @@ function viewBull(){
     <div class="row"><button class="btn" data-act="boReset" ${b.order.length ? "" : "disabled"}>Neu ausbullen</button></div>
     <button class="btn btn-primary btn-lg" data-act="boStart" ${done ? "" : "disabled"}>${done ? esc(pname(b.order[0])) + " beginnt: Spiel starten" : "Spieler antippen"}</button>`;
 }
+const delBtn = (k, id) => UI.armed === k + ":" + id
+  ? `<button class="btn btn-sm btn-primary" data-act="askDel" data-k="${k}" data-v="${id}">Wirklich löschen?</button>`
+  : `<button class="btn btn-sm btn-quiet btn-danger" data-act="askDel" data-k="${k}" data-v="${id}">Löschen</button>`;
 function viewPlayers(){
   const ps = players(), H = liveHistory();
   const row = p => {
     if (UI.editP === p.id) return `<div class="li" data-form="renp" data-v="${p.id}"><input class="field" id="rn-name" value="${esc(p.name)}" maxlength="24" autocomplete="off" enterkeyhint="done"><button class="btn btn-sm btn-green" type="button" data-act="renP" data-v="${p.id}">Speichern</button><button class="btn btn-sm btn-quiet" type="button" data-act="editP" data-v="">Abbrechen</button></div>`;
     const games = H.filter(h => h.pids.includes(p.id)), multi = games.filter(isMulti), wins = multi.filter(h => rankOf(h, p.id) === 1).length;
     return `<div class="li"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s num">${multi.length} Matches · ${wins} Siege · ${games.length - multi.length} Trainings</div></div>
-      <button class="btn btn-sm" data-act="editP" data-v="${p.id}">Umbenennen</button><button class="btn btn-sm btn-quiet btn-danger" data-act="askDelP" data-v="${p.id}">Löschen</button></div>`;
+      <button class="btn btn-sm" data-act="editP" data-v="${p.id}">Umbenennen</button>${delBtn("P", p.id)}</div>`;
   };
   return `<div><h1 class="h1">Spieler</h1><p class="lead">Alle Spieler, die bei dir an die Scheibe gehen. Statistiken bleiben auch nach dem Umbenennen erhalten.</p></div>
     <div class="row" data-form="addp"><input class="field" id="np-name" placeholder="Name eingeben" maxlength="24" autocomplete="off" enterkeyhint="done"><button class="btn btn-primary" type="button" data-act="addP">Hinzufügen</button></div>
@@ -1437,7 +1442,7 @@ function viewStats(){
     const who = h.pids.length > 1 ? ordered.map((id, k) => `${k + 1}. ${esc(h.names[h.pids.indexOf(id)] || pname(id))}`).join(", ") : esc(h.names[0]) + " allein";
     return `<div class="li"><div class="grow"><div class="t">${esc(MODES[h.mode]?.name || h.mode)}${h.mode === "x01" ? " " + h.settings.start : ""}${h.tournament ? ' <span class="pill">Turnier</span>' : ""}</div>
       <div class="s">${who} · ${fmtDate(h.date)}</div></div>
-      <button class="btn btn-sm btn-quiet btn-danger" data-act="askDelH" data-v="${h.id}">Löschen</button></div>`;
+      ${delBtn("H", h.id)}</div>`;
   }).join("");
   return `<div><h1 class="h1">Statistik</h1><p class="lead">Bis zu drei Spieler auswählen und vergleichen. Der beste Wert pro Zeile ist grün.</p></div>
     <div class="chips">${chips}</div>
@@ -1518,7 +1523,7 @@ function viewTDetail(){
   }
   return `<div><button class="btn btn-quiet btn-sm" data-act="go" data-v="tourn">← Turniere</button></div>
     <div class="row"><div class="grow"><h1 class="h1">${esc(T.name)}</h1><p class="lead">${FORMAT_NAME[T.format]} · ${T.settings.start} ${OUT_LABEL[T.settings.outRule]} · first to ${T.settings.legs} ${T.settings.legs === 1 ? "Leg" : "Legs"}</p></div>
-    <button class="btn btn-sm btn-quiet btn-danger" data-act="askDelT" data-v="${T.id}">Löschen</button></div>
+    ${delBtn("T", T.id)}</div>
     ${champ}${body}`;
 }
 function renderGame(){
@@ -1681,9 +1686,11 @@ const ACT = {
   addP(){ doAddPlayer(); },
   renP(el){ doRename(el.dataset.v); },
   editP(el){ UI.editP = el.dataset.v || null; render(); setTimeout(() => $("#rn-name")?.focus(), 0); },
-  askDelP(el){ UI.modal = {type: "confirm", title: pname(el.dataset.v) + " löschen?", text: "Der Spieler verschwindet aus der Auswahl. Gespielte Partien bleiben in der Statistik.", ok: "Löschen", act: "delP", v: el.dataset.v}; render(); },
+  askDel(el){ /* first tap arms the button, second tap deletes */
+    const key = el.dataset.k + ":" + el.dataset.v;
+    if (UI.armed !== key) { UI.armed = key; clearTimeout(UI.armT); UI.armT = setTimeout(() => { if (UI.armed === key) { UI.armed = null; render(); } }, 4000); render(); return; }
+    UI.armed = null; ACT["del" + el.dataset.k](el); toast("Gelöscht"); },
   delP(el){ const p = S.players.find(x => x.id === el.dataset.v); if (p) { p.deleted = true; p.updatedAt = Date.now(); save("main"); } UI.sel = UI.sel.filter(x => x !== el.dataset.v); savePrefs(); UI.modal = null; render(); },
-  askDelH(el){ UI.modal = {type: "confirm", title: "Spiel löschen?", text: "Das Spiel wird aus allen Statistiken entfernt.", ok: "Löschen", act: "delH", v: el.dataset.v}; render(); },
   delH(el){ const h = S.history.find(x => x.id === el.dataset.v); if (h) { for (const k of Object.keys(h)) if (k !== "id" && k !== "date") delete h[k]; h.deleted = true; h.updatedAt = Date.now(); save(monthKey(h.date)); } UI.modal = null; render(); },
   cmpP(el){ const id = el.dataset.v, i = UI.cmp.indexOf(id);
     if (i >= 0) { if (UI.cmp.length > 1) UI.cmp.splice(i, 1); }
@@ -1723,7 +1730,6 @@ const ACT = {
   trainSolo(el){ UI.trainSolo = el.dataset.v; render(); },
   createT(){ createTournament(); render(); },
   openT(el){ UI.tId = el.dataset.v; UI.view = "tdetail"; window.scrollTo(0, 0); render(); },
-  askDelT(el){ UI.modal = {type: "confirm", title: "Turnier löschen?", text: "Spielplan und Ergebnisse des Turniers werden entfernt. Die einzelnen Spiele bleiben in der Statistik.", ok: "Löschen", act: "delT", v: el.dataset.v}; render(); },
   delT(el){ const T = S.tournaments.find(t => t.id === el.dataset.v); if (T) { for (const k of Object.keys(T)) if (!["id", "createdAt"].includes(k)) delete T[k]; T.deleted = true; T.updatedAt = Date.now(); save("main"); } UI.modal = null; UI.view = "tourn"; render(); },
   playM(el){ const T = S.tournaments.find(t => t.id === UI.tId), m = findMatch(T, el.dataset.v).m;
     if (G && !G.finished) { UI.modal = {type: "confirm", title: "Laufendes Spiel verwerfen?", text: "Es läuft noch ein anderes Spiel. Wenn du dieses Match startest, geht es verloren.", ok: "Match starten", act: "playMForce", v: m.id}; render(); return; }
