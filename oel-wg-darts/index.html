@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
-<script>window.OELWG_STANDALONE = true;</script>
+<script>window.OELWG_STANDALONE = true; window.OELWG_VERSION = "16.11.2026 09:39";</script>
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;overscroll-behavior:none}
@@ -1531,7 +1531,8 @@ function viewSettings(){
     <section class="panel"><h2 class="h3">Daten</h2>${syncHTML()}
       <p class="muted small" style="margin:0">${players().length} Spieler, ${games} Spiele, ${S.tournaments.filter(t => !t.deleted).length} Turniere. ${STANDALONE ? "Die Daten liegen nur auf diesem Gerät. Speichere ab und zu ein Backup, damit nichts verloren geht, etwa beim Handywechsel." : "Bist du bei Claude angemeldet, liegen die Daten privat in deinem Konto und sind auf jedem Gerät da, auf dem du die App öffnest. Ein Backup als Datei ist zusätzliche Sicherheit."}</p>
       <div class="row"><button class="btn" data-act="backup">Backup speichern</button><label class="btn" for="restore-file">Backup laden<input type="file" id="restore-file" accept=".json,application/json" hidden></label></div></section>
-    <section class="panel"><h2 class="h3">Über die App</h2><p class="muted small" style="margin:0">Öl WG Darts Trainer · Spiele: ${Object.values(MODES).map(m => esc(m.name)).join(", ")}.</p></section>
+    <section class="panel"><h2 class="h3">Über die App</h2><p class="muted small" style="margin:0">Öl WG Darts Trainer · Version ${esc(window.OELWG_VERSION || "Claude")} · Spiele: ${Object.values(MODES).map(m => esc(m.name)).join(", ")}.</p>
+      ${STANDALONE ? `<div class="row"><button class="btn btn-sm" data-act="updateApp">App aktualisieren</button></div>` : ""}</section>
     <div class="row" style="justify-content:center"><button class="btn btn-quiet btn-sm" data-act="wgOpen" aria-expanded="${!!UI.wgOpen}">WG-Modus</button></div>
     ${UI.wgOpen ? wgPanel() : ""}`;
 }
@@ -1837,6 +1838,12 @@ const ACT = {
     else UI.cmp.push(id);
     savePrefs(); render(); },
   statsCat(el){ UI.statsCat = el.dataset.v; render(); },
+  async updateApp(){
+    toast("Neueste Version wird geladen …");
+    try { const regs = await navigator.serviceWorker?.getRegistrations?.() || []; await Promise.all(regs.map(r => r.unregister())); } catch (e) {}
+    try { const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); } catch (e) {}
+    location.replace(location.pathname + "?v=" + Date.now());
+  },
   wgOpen(){ UI.wgOpen = !UI.wgOpen; render(); },
   wgFx(el){ setWg({fx: el.dataset.v !== "off"}); if (el.dataset.v === "off") { fxQueue = []; clearTimeout(fxTimer); fxBusy = false; $("#fx").innerHTML = ""; } render(); },
   wgMem(el){ const m = [...wgCfg().members], id = el.dataset.v, i = m.indexOf(id); if (i >= 0) m.splice(i, 1); else m.push(id); setWg({members: m}); render(); },
