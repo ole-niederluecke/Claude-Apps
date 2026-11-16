@@ -490,8 +490,8 @@ async function pushRemote(){
       const ref = Sync.db.doc("data/users/" + Sync.uid + "/" + k);
       const cur = await withTimeout(ref.get(), 10000), rv = cur.exists ? cur.data() : null;
       if (k === "main") {
-        if (rv) { S.players = mergeList(S.players, rv.players || [])[0]; S.tournaments = mergeList(S.tournaments, rv.tournaments || [])[0]; }
-        await ref.set({players: S.players, tournaments: S.tournaments, v: 1});
+        if (rv) { S.players = mergeList(S.players, rv.players || [])[0]; S.tournaments = mergeList(S.tournaments, rv.tournaments || [])[0]; S.wg = newerWg(S.wg, rv.wg); }
+        await ref.set({players: S.players, tournaments: S.tournaments, ...(S.wg ? {wg: S.wg} : {}), v: 1});
       } else {
         if (rv) S.history = mergeList(S.history, rv.games || [])[0];
         await ref.set({games: S.history.filter(h => monthKey(h.date) === k)});
@@ -504,6 +504,7 @@ async function pushRemote(){
   if (failed) toast("Speichern im Konto fehlgeschlagen (" + Sync.lastError + "). Es wird erneut versucht.");
   else Sync.lastError = null;
 }
+const newerWg = (a, b) => !a ? (b || null) : !b ? a : ((b.updatedAt || 0) > (a.updatedAt || 0) ? b : a);
 function mergeList(local, remote){
   const map = new Map(); let localNewer = false;
   for (const r of remote) map.set(r.id, r);
@@ -517,15 +518,16 @@ async function pullRemote(){
     const snap = await withTimeout(Sync.db.collection("data/users/" + Sync.uid).get(), 10000);
     const remote = {players:[], tournaments:[], history:[]};
     for (const d of snap.docs) { const v = d.data(); if (!v) continue;
-      if (d.id === "main") { remote.players = v.players || []; remote.tournaments = v.tournaments || []; }
+      if (d.id === "main") { remote.players = v.players || []; remote.tournaments = v.tournaments || []; remote.wg = v.wg || null; }
       else if (d.id.startsWith("h-")) remote.history.push(...(v.games || []));
     }
     const before = JSON.stringify(S);
     const [pl, a] = mergeList(S.players, remote.players);
     const [to, b] = mergeList(S.tournaments, remote.tournaments);
     const [hi, c] = mergeList(S.history, remote.history);
-    S = {players: pl, tournaments: to, history: hi};
-    if (a || b) Sync.dirty.add("main");
+    const wg = newerWg(S.wg, remote.wg);
+    S = {players: pl, tournaments: to, history: hi, ...(wg ? {wg} : {})};
+    if (a || b || (wg && wg !== remote.wg)) Sync.dirty.add("main");
     if (c) { const rIds = new Map(remote.history.map(h => [h.id, h.updatedAt||0])); S.history.forEach(h => { if (!rIds.has(h.id) || (h.updatedAt||0) > rIds.get(h.id)) Sync.dirty.add(monthKey(h.date)); }); }
     lsSet(LS_DATA, S);
     if (JSON.stringify(S) !== before && UI.view !== "game") render();
@@ -749,7 +751,7 @@ function x01ApplyVisit(v, darts, dbl = 0, bull = false){
   UI.kp = "";
   if (bust) { toast("Bust! Rest bleibt " + p.rem); say("Überworfen"); advance(); return; }
   p.rem = nr;
-  if (p.rem === 0) { say("Game shot"); if (v > p.st.hiCo) p.st.hiCo = v; x01LegWon(G.cur); } else { say(String(v)); funScore(v); advance(); }
+  if (p.rem === 0) { say("Game shot"); if (v > p.st.hiCo) p.st.hiCo = v; x01LegWon(G.cur); } else { say(String(v)); funScore(v); lowScoreFx(G.cur); advance(); }
 }
 function x01Dart(n, m){
   const p = G.p[G.cur], st = G.settings;
@@ -768,7 +770,7 @@ function x01EndVisit(bust){
   const p = G.p[G.cur], darts = G.visit.length, sc = bust ? 0 : G.vStart - p.rem;
   G.coScore = sc; G.coBull = G.visit[G.visit.length - 1] === "Bull";
   x01Stats(p, sc, darts);
-  if (!bust && p.rem !== 0) funScore(sc);
+  if (!bust && p.rem !== 0) { funScore(sc); lowScoreFx(G.cur); }
   p.last = bust ? "Bust" : sc; G.visit = [];
   if (bust) { toast("Bust! Rest bleibt " + p.rem); say("Überworfen"); }
   else say(p.rem === 0 ? "Game shot" : String(sc));
@@ -779,7 +781,6 @@ function x01LegWon(i){
   p.legs++; p.st.legsWon++;
   if (!p.st.bestLeg || p.legDarts < p.st.bestLeg) p.st.bestLeg = p.legDarts;
   const legDarts = p.legDarts;
-  if (isName(G.names[i], "ole") && legDarts && p.legPts / legDarts * 3 < 30) fx("Ein Klassiker.", "Ole checkt mit " + fmt1(p.legPts / legDarts * 3) + " Average");
   let matchWon = false;
   if (st.sets > 1) {
     if (p.legs >= st.legs) { p.sets++; G.p.forEach(q => q.legs = 0); if (p.sets >= st.sets) matchWon = true; else { toast(`Set an ${G.names[i]}`); G.setNo++; } }
@@ -796,7 +797,7 @@ function x01LegWon(i){
     G.visit = []; advance(); return;
   }
   G.legStarter = nextActiveFrom(G.legStarter);
-  G.p.forEach(q => { q.rem = st.start; q.legDarts = 0; q.legPts = 0; q.leg100 = 0; q.isIn = st.inRule !== "double"; q.last = null; });
+  G.p.forEach(q => { q.rem = st.start; q.legDarts = 0; q.legPts = 0; q.leg100 = 0; q.lowFx = false; q.isIn = st.inRule !== "double"; q.last = null; });
   G.cur = G.legStarter; G.legNo++; G.visit = [];
 }
 
@@ -1517,7 +1518,18 @@ function viewSettings(){
     <section class="panel"><h2 class="h3">Daten</h2>${syncHTML()}
       <p class="muted small" style="margin:0">${players().length} Spieler, ${games} Spiele, ${S.tournaments.filter(t => !t.deleted).length} Turniere. ${STANDALONE ? "Die Daten liegen nur auf diesem Gerät. Speichere ab und zu ein Backup, damit nichts verloren geht, etwa beim Handywechsel." : "Bist du bei Claude angemeldet, liegen die Daten privat in deinem Konto und sind auf jedem Gerät da, auf dem du die App öffnest. Ein Backup als Datei ist zusätzliche Sicherheit."}</p>
       <div class="row"><button class="btn" data-act="backup">Backup speichern</button><label class="btn" for="restore-file">Backup laden<input type="file" id="restore-file" accept=".json,application/json" hidden></label></div></section>
-    <section class="panel"><h2 class="h3">Über die App</h2><p class="muted small" style="margin:0">Öl WG Darts Trainer · Spiele: ${Object.values(MODES).map(m => esc(m.name)).join(", ")}.</p></section>`;
+    <section class="panel"><h2 class="h3">Über die App</h2><p class="muted small" style="margin:0">Öl WG Darts Trainer · Spiele: ${Object.values(MODES).map(m => esc(m.name)).join(", ")}.</p></section>
+    <div class="row" style="justify-content:center"><button class="btn btn-quiet btn-sm" data-act="wgOpen" aria-expanded="${!!UI.wgOpen}">WG-Modus</button></div>
+    ${UI.wgOpen ? wgPanel() : ""}`;
+}
+function wgPanel(){
+  const c = wgCfg(), m = c.members;
+  const chips = players().map(p => { const on = m.includes(p.id); return `<button class="chip ${on ? "on" : ""}" data-act="wgMem" data-v="${p.id}" aria-pressed="${on}"><span class="badge">${on ? "✓" : "+"}</span>${esc(p.name)}</button>`; }).join("");
+  return `<section class="panel tight"><h2 class="h3">WG-Modus</h2>
+    <div class="opts">${optHTML({k: "fx", label: "Effekte", type: "seg", vals: [["on", "An"], ["off", "Aus"]]}, c.fx === false ? "off" : "on", "wgFx")}</div>
+    <p class="muted small" style="margin:0">Effekte sind die kurzen Einblendungen: Waschmaschine, schwaches Scoring und die Sprüche am Spielende.</p>
+    <div class="opt"><span class="opt-label">WG-Bewohner</span><div class="chips">${chips || '<span class="muted small">Noch keine Spieler angelegt.</span>'}</div></div>
+    <p class="muted small" style="margin:0">Die Strichliste zählt bei 501, wenn nur Bewohner gegeneinander spielen (ab zwei). Zieht jemand aus oder ein, tippe die Namen hier an oder ab.</p></section>`;
 }
 function viewTourn(){
   const ts = [...S.tournaments].filter(t => !t.deleted).sort((a, b) => b.createdAt - a.createdAt);
@@ -1719,10 +1731,17 @@ function dblTable(R, out){
 /* WG house rules: 501 between Ole, Fabi and Lukas (two or all three of them) */
 const WG = ["ole", "fabi", "lukas"];
 const isName = (n, who) => String(n || "").trim().toLowerCase() === who;
+/* Who lives in the WG and whether effects are on. Until it is changed in the hidden settings,
+   the residents are the players called Ole, Fabi and Lukas. */
+function wgCfg(){
+  if (S.wg) return S.wg;
+  return {members: players().filter(p => WG.includes(p.name.trim().toLowerCase())).map(p => p.id), fx: true, updatedAt: 0};
+}
+function setWg(patch){ S.wg = {...wgCfg(), ...patch, updatedAt: Date.now()}; save("main"); }
 function wgOn(){
-  if (!G || G.mode !== "x01" || G.settings.start !== 501 || G.pids.length < 2 || G.pids.length > 3) return false;
-  const ns = G.names.map(n => String(n).trim().toLowerCase());
-  return ns.every(n => WG.includes(n)) && new Set(ns).size === ns.length;
+  if (!G || G.mode !== "x01" || G.settings.start !== 501 || G.pids.length < 2) return false;
+  const m = wgCfg().members;
+  return G.pids.every(id => m.includes(id)) && new Set(G.pids).size === G.pids.length;
 }
 const ONE = new Set([0, ...SEGS.map(s => s.v)]), TWO = new Set([...ONE].flatMap(a => [...ONE].map(b => a + b)));
 /* could the last of d darts have been the bull, given a checkout of v? */
@@ -1787,7 +1806,7 @@ const ACT = {
   closeModal(){ UI.modal = null; render(); },
   scrim(el, ev){ if (ev.target === el) { UI.modal = null; render(); } },
   pause(){ UI.modal = null; UI.view = G.tournament ? "tdetail" : "play"; if (G.tournament) UI.tId = G.tournament.tid; keepAwake(false); render(); },
-  discard(){ const t = G.tournament; G = null; persistGame(); UI.modal = null; UI.view = t ? "tdetail" : "play"; if (t) UI.tId = t.tid; keepAwake(false); render(); },
+  discard(){ fxQueue = []; clearTimeout(fxTimer); fxBusy = false; $("#fx").innerHTML = ""; const t = G.tournament; G = null; persistGame(); UI.modal = null; UI.view = t ? "tdetail" : "play"; if (t) UI.tId = t.tid; keepAwake(false); render(); },
   again(){ const g = G; const pids = g.pids.length > 1 ? [...g.pids.slice(1), g.pids[0]] : g.pids; UI.modal = null; G = null; persistGame(); launch(g.mode, g.settings, pids); },
   done(){ const t = G.tournament; G = null; persistGame(); UI.modal = null; UI.view = t ? "tdetail" : "play"; if (t) UI.tId = t.tid; window.scrollTo(0, 0); render(); },
   addP(){ doAddPlayer(); },
@@ -1805,6 +1824,9 @@ const ACT = {
     else UI.cmp.push(id);
     savePrefs(); render(); },
   statsCat(el){ UI.statsCat = el.dataset.v; render(); },
+  wgOpen(){ UI.wgOpen = !UI.wgOpen; render(); },
+  wgFx(el){ setWg({fx: el.dataset.v !== "off"}); if (el.dataset.v === "off") { fxQueue = []; clearTimeout(fxTimer); fxBusy = false; $("#fx").innerHTML = ""; } render(); },
+  wgMem(el){ const m = [...wgCfg().members], id = el.dataset.v, i = m.indexOf(id); if (i >= 0) m.splice(i, 1); else m.push(id); setWg({members: m}); render(); },
   setPalette(el){ prefs.palette = el.dataset.v; lsSet(LS_PREFS, prefs); applyTheme(); render(); },
   setTheme(el){ prefs.theme = el.dataset.v; lsSet(LS_PREFS, prefs); applyTheme(); render(); },
   setVoice(el){ prefs.voice = el.dataset.v; lsSet(LS_PREFS, prefs); render(); if (prefs.voice === "on") say("Hundertachtzig", true); },
@@ -1883,6 +1905,7 @@ document.addEventListener("change", ev => {
       S.players = mergeList(S.players, d.players)[0];
       S.tournaments = mergeList(S.tournaments, d.tournaments || [])[0];
       S.history = mergeList(S.history, d.history)[0];
+      S.wg = newerWg(S.wg, d.wg);
       save(["main", ...new Set(S.history.map(h => monthKey(h.date)))]);
       toast(`Backup eingespielt: ${liveHistory().length - before} Spiele neu`);
       render();
@@ -1907,6 +1930,7 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 const pickOne = a => a[Math.floor(Math.random() * a.length)];
 let fxQueue = [], fxBusy = false, fxTimer = null;
 function fx(text, sub = "", kind = "", now = false){
+  if (wgCfg().fx === false) return;
   if (now) { fxQueue = fxQueue.filter(f => f.kind === "rage"); clearTimeout(fxTimer); fxBusy = false; }
   fxQueue.push({text, sub, kind}); if (!fxBusy) fxNext();
 }
@@ -1916,6 +1940,16 @@ function fxNext(){
   fxBusy = true;
   el.innerHTML = `<div class="fx ${f.kind}" role="status"><div class="fx-t">${esc(f.text)}</div>${f.sub ? `<div class="fx-s">${esc(f.sub)}</div>` : ""}</div>`;
   fxTimer = setTimeout(fxNext, 2300);
+}
+/* weak scoring: after at least three visits in a leg, still far from the finish, leg average under 30 */
+const LOW = [n => "Haste nen schwachen Arm?", n => "Haste das Werfen verlernt?", n => `${n}, das Board ist da vorne.`, n => `Aufwärmen ist vorbei, ${n}.`, n => "Sind die Darts zu schwer?"];
+function lowScoreFx(i){
+  const p = G.p[i]; if (!p || p.lowFx || (p.legDarts || 0) < 9 || p.rem <= 100) return;
+  const avg = (p.legPts || 0) / p.legDarts * 3;
+  if (avg >= 30) return;
+  p.lowFx = true;
+  const n = G.names[i].trim();
+  fx(isName(n, "ole") ? "Ein Klassiker." : pickOne(LOW)(n), `${n} · ${fmt1(avg)} Average in diesem Leg`, "rage");
 }
 function funScore(v){
   if (v === 26) fx(pickOne(["Waschma!", "Waschmaschine!", "Washing machine!"]), "26 Punkte", "wash", true);
@@ -1928,12 +1962,12 @@ const RAGE = [
 const DOOR = ["Türzerstörung incoming …", "Bitte Gläser in Sicherheit bringen", "Doppelstrich! Jemand informiert den Vermieter", "Das gibt Ärger am Kühlschrank"];
 function endFx(){
   if (G.pids.length < 2) return;
-  const losers = G.order.slice(1).map(i => G.names[i]);
+  const losers = G.order.slice(1).map(i => G.names[i]), members = wgCfg().members;
   fxQueue = fxQueue.filter(f => f.kind === "rage"); if (fxBusy && !$("#fx .fx.rage")) { clearTimeout(fxTimer); fxBusy = false; }
   if (G.wgResult && G.wgResult.strokes >= 2) fx(pickOne(DOOR), `${G.wgResult.strokes} Striche für ${G.names[G.order[0]]}`, "rage");
   const ole = losers.find(n => isName(n, "ole"));
   if (ole) fx("MAAAN, das kann doch nicht sein!", ole, "rage");
-  const rival = losers.filter(n => isName(n, "fabi") || isName(n, "lukas"));
+  const rival = G.order.slice(1).filter(i => members.includes(G.pids[i]) && !isName(G.names[i], "ole")).map(i => G.names[i]);
   if (rival.length) { const n = rival[rival.length - 1].trim(); fx(pickOne(RAGE)(n), "", "rage"); }
 }
 function strokesSVG(n){
