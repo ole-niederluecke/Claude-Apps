@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
-<script>window.OELWG_STANDALONE = true; window.OELWG_VERSION = "16.11.2026 09:39";</script>
+<script>window.OELWG_STANDALONE = true; window.OELWG_VERSION = "16.11.2026 19:45";</script>
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;overscroll-behavior:none}
@@ -289,7 +289,9 @@ button.pc{cursor:pointer}
 .pc-name{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .pc-legs{font-size:12.5px;color:var(--muted);white-space:nowrap}
 .pc-big{font-family:var(--display);font-weight:700;font-size:clamp(52px,15vw,84px);line-height:.95;letter-spacing:-.01em}
-.pcs:not(.n1):not(.n2) .pc-big{font-size:clamp(40px,11vw,60px)}
+/* three or more players: keep big cards, two per row, the board scrolls */
+.pcs:not(.n1){grid-template-columns:repeat(2,minmax(0,1fr))}
+.game .board{min-height:clamp(150px,27vh,240px)}
 .pc-co{font-family:var(--display);font-size:18px;font-weight:600;color:var(--green);min-height:22px;letter-spacing:.04em}
 .pc-place{font-family:var(--display);font-size:18px;font-weight:700;color:var(--gold)}
 .pc-meta{font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px}
@@ -334,6 +336,10 @@ button.pc{cursor:pointer}
 .kgrid .q{background:transparent;border-style:dashed;font-size:19px;color:var(--muted)}
 .kgrid .q:empty{visibility:hidden}
 .kgrid .ok{background:var(--fg);color:var(--bg);border-color:var(--fg);font-family:var(--body);font-size:15px}
+.kdisp output .kprev{margin-right:auto;font-family:var(--body);font-size:13px;font-weight:600;color:var(--green);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;padding-right:8px}
+.kdisp output .kprev.bad{color:var(--red)}
+.kdisp output:has(span:empty:only-child)::before{content:attr(data-ph);color:var(--muted);font-size:17px;font-weight:500;font-family:var(--body)}
+.gmenu{min-width:40px;font-size:18px;font-weight:700;padding-inline:10px}
 .kdisp output{flex:1;min-width:0;display:flex;height:48px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);align-items:center;justify-content:flex-end;padding:0 14px;font-family:var(--display);font-size:34px;font-weight:700}
 .kdisp output:empty::before{content:attr(data-ph);color:var(--muted);font-size:17px;font-weight:500;font-family:var(--body)}
 .quick{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
@@ -750,6 +756,7 @@ function x01Stats(p, score, darts){
   if (f9 > 0) { p.st.f9d += f9; p.st.f9p += score * f9 / darts; }
   p.legDarts += darts; p.legPts = (p.legPts || 0) + score;
   if (score >= 100) p.leg100 = (p.leg100 || 0) + 1;
+  if (score > 0) { p.vf ||= {}; p.vf[score] = (p.vf[score] || 0) + 1; }
   if (score === 180) p.st.s180++; else if (score >= 140) p.st.s140++; else if (score >= 100) p.st.s100++;
   if (score > p.st.hi) p.st.hi = score;
 }
@@ -985,7 +992,7 @@ const ENGINES = {
     pad(G){ return G.settings.input === "darts" ? dartPad(false) : visitPad(); },
     switchable: G => G.settings.inRule !== "double",
     ranking(G){ return rankRest((a, b) => (b.sets - a.sets) || (b.legs - a.legs) || (a.rem - b.rem)); },
-    result(G, i){ const p = G.p[i]; return {...p.st, sets: p.sets}; },
+    result(G, i){ const p = G.p[i]; return {...p.st, sets: p.sets, vf: p.vf || {}}; },
     cols: G => [G.settings.sets > 1 ? "Sets" : "Legs", "Ø", "First 9", "CO%", "Höchstes CO"],
     row: (G, i) => { const p = G.p[i]; return [G.settings.sets > 1 ? p.sets : p.st.legsWon, fmt1(p.st.darts ? p.st.pts / p.st.darts * 3 : 0), fmt1(p.st.f9d ? p.st.f9p / p.st.f9d * 3 : 0), p.st.dbl ? pct(p.st.legsWon, p.st.dbl) : "–", p.st.hiCo || "–"]; },
   },
@@ -1135,14 +1142,38 @@ function padTop(){
   const left = G.mode === "x01" || G.mode === "c121" ? ` · Rest ${G.p[G.cur].rem - (G.vsum || 0)}` : "";
   return `<div class="padtop"><span class="whose">${esc(G.names[G.cur])} ist dran${left}</span>${G.visit.length ? `<span class="small muted">Dart ${G.visit.length + 1} von 3</span>` : ""}</div>`;
 }
+/* Dynamic shortcuts: the player's most frequent visit scores (all X01 games plus this one) */
+const DEFAULT_QUICK = [26, 41, 45, 57, 60, 81, 85, 100];
+function quickFor(){
+  if (prefs.dynQuick !== "on") return DEFAULT_QUICK;
+  const pid = G.pids[G.cur], cnt = {};
+  const addAll = vf => { for (const [k, n] of Object.entries(vf || {})) cnt[k] = (cnt[k] || 0) + n; };
+  for (const h of liveHistory()) if (h.mode === "x01" && h.res[pid]) addAll(h.res[pid].vf);
+  if (G.mode === "x01") addAll(G.p[G.cur].vf);
+  if (G.mode === "score") G.p[G.cur].visits.forEach(v => { if (v > 0) cnt[v] = (cnt[v] || 0) + 1; });
+  const top = Object.entries(cnt).sort((a, b) => b[1] - a[1] || b[0] - a[0]).slice(0, 8).map(([k]) => +k);
+  for (const d of DEFAULT_QUICK) if (top.length < 8 && !top.includes(d)) top.push(d);
+  return top.sort((a, b) => a - b);
+}
+/* Instant score: while typing, show the rest and a checkout route before confirming */
+function instantHTML(){
+  if (prefs.instant === "off" || UI.kp === "" || !(G.mode === "x01" || G.mode === "c121")) return "";
+  const t = parseInt(UI.kp, 10), rem = G.p[G.cur].rem, out = G.mode === "x01" ? G.settings.outRule : "double";
+  if (t > 180 || !POSSIBLE.has(t)) return `<span class="kprev bad">nicht möglich</span>`;
+  const nr = rem - t;
+  if (nr < 0 || (out !== "straight" && nr === 1)) return `<span class="kprev bad">Bust</span>`;
+  if (nr === 0) return checkout(t, 3, out) ? `<span class="kprev good">Check-out!</span>` : `<span class="kprev bad">Bust</span>`;
+  const co = checkout(nr, 3, out);
+  return `<span class="kprev">Rest ${nr}${co ? " · " + esc(co.join(" ")) : ""}</span>`;
+}
 /* Sum entry. Quick scores sit left and right of the keypad, so nothing has to be swiped. */
 function visitPad(opt = {}){
-  const quick = opt.quick || [26, 41, 45, 57, 60, 81, 85, 100];
+  const quick = opt.quick || quickFor();
   const rest = opt.rest ?? (G.mode === "x01" || G.mode === "c121");
   const q = i => quick[i] != null ? `<button class="q" data-act="quick" data-v="${quick[i]}">${quick[i]}</button>` : `<button class="q" disabled aria-hidden="true"></button>`;
   const d = n => `<button data-act="kd" data-v="${n}">${n}</button>`;
   const ok = `<button class="ok" data-act="kok">${UI.kp === "" ? "0 / Bust" : "Punkte"}</button>`;
-  return `<div class="kdisp"><output id="kp" data-ph="${esc(opt.ph || (rest ? "Punkte oder Restscore" : "Punkte der Aufnahme"))}" class="num">${esc(UI.kp)}</output>
+  return `<div class="kdisp"><output id="kp" data-ph="${esc(opt.ph || (rest ? "Punkte oder Restscore" : "Punkte der Aufnahme"))}" class="num">${instantHTML()}<span>${esc(UI.kp)}</span></output>
       ${rest ? `<button class="rest" data-act="krest" ${UI.kp === "" ? "disabled" : ""}>Restscore</button>` : ""}</div>
     <div class="kgrid">${q(0)}${d(1)}${d(2)}${d(3)}${q(4)}${q(1)}${d(4)}${d(5)}${d(6)}${q(5)}${q(2)}${d(7)}${d(8)}${d(9)}${q(6)}${q(3)}<button data-act="kdel" aria-label="Löschen">⌫</button>${d(0)}${ok}${q(7)}</div>`;
 }
@@ -1554,20 +1585,19 @@ function viewTourn(){
 function viewTNew(){
   const f = UI.tf, n = f.sel.length, ok = n >= 2 && n <= 32;
   const o = [
-    {k:"format", label:"Modus", type:"seg", vals:[["ko","K.-o."],["dko","Doppel-K.-o."],["league","Liga"]]},
-    ...(f.format === "league" ? [{k:"twice", label:"Hin- und Rückspiel", type:"seg", vals:[["no","Nein"],["yes","Ja"]]}] : []),
-    {k:"start", label:"Spiel", type:"seg", vals:[[301,"301"],[501,"501"],[701,"701"]]},
-    {k:"outRule", label:"Check-out", type:"seg", vals:[["double","Double Out"],["master","Master Out"],["straight","Single Out"]]},
-    {k:"legs", label:"Legs zum Sieg (first to)", type:"step", min:1, max:9},
-    {k:"startMode", label:"Wer beginnt ein Match?", type:"seg", vals:[["bull","Ausbullen"],["order","Erstgenannter"]]},
-    {k:"shuffle", label:"Auslosung", type:"seg", vals:[["yes","Zufällig"],["no","Reihenfolge der Auswahl"]]},
+    {k:"format", label:"Modus", wide: true, type:"seg", vals:[["ko","K.-o."],["dko","Doppel-K.-o."],["league","Liga"]]},
+    ...(f.format === "league" ? [{k:"twice", label:"Hin & Rück", type:"seg", vals:[["no","Nein"],["yes","Ja"]]}] : []),
+    {k:"start", label:"Start", type:"seg", vals:[[301,"301"],[501,"501"],[701,"701"]]},
+    {k:"outRule", label:"Check-out", type:"seg", vals:[["double","Double"],["master","Master"],["straight","Single"]]},
+    {k:"legs", label:"Legs (first to)", type:"step", min:1, max:9},
+    {k:"startMode", label:"Anwurf", type:"seg", vals:[["bull","Ausbullen"],["order","1. Spieler"]]},
+    {k:"shuffle", label:"Auslosung", type:"seg", vals:[["yes","Zufall"],["no","Auswahl"]]},
   ];
-  return `<div><button class="btn btn-quiet btn-sm" data-act="go" data-v="tourn">← Turniere</button></div>
-    <div><h1 class="h1">Neues Turnier</h1></div>
-    <details class="panel rules"><summary>So funktionieren die Turniere</summary><div class="rtext"><p><b>K.-o.-System:</b> Wer ein Match verliert, scheidet aus, der Sieger kommt eine Runde weiter. Geht die Teilnehmerzahl nicht in 2, 4, 8 oder 16 auf, bekommen die ersten Gesetzten ein Freilos für die erste Runde.</p><p><b>Doppel-K.-o.:</b> Raus ist erst, wer zwei Matches verloren hat. Wer in der Gewinnerrunde verliert, rutscht in die Verliererrunde und kann sich dort zurückkämpfen. Im Finale trifft der Sieger der Gewinnerrunde auf den Sieger der Verliererrunde. Gewinnt der Spieler aus der Verliererrunde, hat jeder eine Niederlage, und es gibt ein Entscheidungsspiel.</p><p><b>Liga:</b> Jeder spielt gegen jeden. Ein Sieg bringt 2 Punkte. Bei Punktgleichheit entscheidet die Leg-Differenz, danach die Zahl der gewonnenen Legs.</p><p>Jedes Match ist ein X01-Spiel mit den Einstellungen unten. Du kannst es in der App spielen (das Ergebnis wird automatisch eingetragen) oder ein Ergebnis von Hand eintragen.</p></div></details>
-    <section class="panel"><div class="opt"><label class="opt-label" for="tf-name">Name</label><input class="field" id="tf-name" data-bind="name" value="${esc(f.name)}" placeholder="z. B. Dartabend Freitag" maxlength="40" autocomplete="off"></div>${o.map(x => optHTML(x, f[x.k], "setTf")).join("")}</section>
-    <section class="panel"><h2 class="h3">Teilnehmer <span class="small muted">${n} ausgewählt</span></h2>${playerPicker(f.sel, "selT", 32)}</section>
-    <button class="btn btn-primary btn-lg" data-act="createT" ${ok ? "" : "disabled"}>${ok ? "Turnier starten" : "Mindestens 2 Spieler auswählen"}</button>`;
+  return `<div class="shead"><button class="btn btn-quiet btn-sm" data-act="go" data-v="tourn" aria-label="Zurück zu den Turnieren">←</button><h1 class="h1">Neues Turnier</h1></div>
+    <section class="panel tight"><div class="opts"><div class="opt"><label class="opt-label" for="tf-name">Name</label><input class="field" id="tf-name" data-bind="name" value="${esc(f.name)}" placeholder="z. B. Dartabend" maxlength="40" autocomplete="off"></div>${o.map(x => optHTML(x, f[x.k], "setTf")).join("")}</div></section>
+    <section class="panel tight"><h2 class="h3">Teilnehmer <span class="small muted">${n} ausgewählt</span></h2>${playerPicker(f.sel, "selT", 32)}</section>
+    <button class="btn btn-primary btn-lg" data-act="createT" ${ok ? "" : "disabled"}>${ok ? "Turnier starten" : "Mindestens 2 Spieler auswählen"}</button>
+    <details class="panel rules"><summary>So funktionieren die Turniere</summary><div class="rtext"><p><b>K.-o.-System:</b> Wer ein Match verliert, scheidet aus, der Sieger kommt eine Runde weiter. Geht die Teilnehmerzahl nicht in 2, 4, 8 oder 16 auf, bekommen die ersten Gesetzten ein Freilos für die erste Runde.</p><p><b>Doppel-K.-o.:</b> Raus ist erst, wer zwei Matches verloren hat. Wer in der Gewinnerrunde verliert, rutscht in die Verliererrunde und kann sich dort zurückkämpfen. Im Finale trifft der Sieger der Gewinnerrunde auf den Sieger der Verliererrunde. Gewinnt der Spieler aus der Verliererrunde, hat jeder eine Niederlage, und es gibt ein Entscheidungsspiel.</p><p><b>Liga:</b> Jeder spielt gegen jeden. Ein Sieg bringt 2 Punkte. Bei Punktgleichheit entscheidet die Leg-Differenz, danach die Zahl der gewonnenen Legs.</p><p>Jedes Match ist ein X01-Spiel mit den Einstellungen unten. Du kannst es in der App spielen (das Ergebnis wird automatisch eingetragen) oder ein Ergebnis von Hand eintragen.</p></div></details>`;
 }
 function matchCard(T, m){
   const name = id => id === BYE ? "Freilos" : id ? esc(pname(id)) : "offen";
@@ -1610,7 +1640,7 @@ function viewTDetail(){
 function renderGame(){
   const E = ENGINES[G.mode];
   return `<div class="game">
-    <div class="wrap ghead"><button class="btn btn-sm btn-quiet" data-act="askQuit">✕ Menü</button><div class="gt">${esc(E.title(G))}</div><button class="btn btn-sm" data-act="undo" ${G.undo.length ? "" : "disabled"}>↶ Zurück</button></div>
+    <div class="wrap ghead"><button class="btn btn-sm btn-quiet" data-act="askQuit">✕ Menü</button><div class="gt">${esc(E.title(G))}</div><button class="btn btn-sm" data-act="undo" ${G.undo.length ? "" : "disabled"}>↶ Zurück</button><button class="btn btn-sm gmenu" data-act="gameMenu" aria-label="Spieleinstellungen">⋯</button></div>
     <div class="board"><div class="wrap">${E.board(G)}</div></div>
     <div class="pad"><div class="wrap">${G.finished ? "" : padTop() + E.pad(G)}</div></div></div>`;
 }
@@ -1619,6 +1649,7 @@ function render(){
   if (UI.view === "game" && G) {
     if (G.finished && !UI.modal) UI.modal = {type: "finish"};
     app.innerHTML = renderGame();
+    const on = $(".board .pc.on"); if (on && G.pids.length > 2) on.scrollIntoView({block: "nearest"});
   } else {
     if (UI.view === "game" || (UI.view === "bulloff" && !UI.bo)) UI.view = "play";
     const v = UI.view;
@@ -1648,6 +1679,16 @@ function renderModal(){
     h = `<h2>${m.v ? m.v + " Punkte" : "0 Punkte / Bust"}</h2><p class="muted" style="margin:0">Wie viele Darts gingen aufs Doppel? Das braucht die App für die Checkout-Quote.</p>
       ${pick("dblAtt", m.lo, m.hi, k => k === 1 ? "Dart" : "Darts")}
       <button class="btn btn-quiet" data-act="closeModal">Abbrechen</button>`;
+  } else if (m.type === "gmenu") {
+    const E = ENGINES[G.mode], visitMode = ["x01", "score", "c121"].includes(G.mode);
+    const rows = [];
+    if (E.switchable && E.switchable(G)) rows.push(optHTML({k: "input", label: "Eingabe", type: "seg", vals: [["visit", "Summe"], ["darts", "Einzeldarts"]]}, G.settings.input, "setInput"));
+    if (visitMode) rows.push(optHTML({k: "dyn", label: "Dynamische Shortcuts", type: "seg", vals: [["on", "An"], ["off", "Aus"]]}, prefs.dynQuick === "on" ? "on" : "off", "setDyn"));
+    if (G.mode === "x01" || G.mode === "c121") rows.push(optHTML({k: "ins", label: "Instant-Score", type: "seg", vals: [["on", "An"], ["off", "Aus"]]}, prefs.instant === "off" ? "off" : "on", "setInstant"));
+    h = `<h2>Spieleinstellungen</h2>${rows.length ? `<div class="opts">${rows.join("")}</div>` : `<p class="muted" style="margin:0">Für dieses Spiel gibt es keine Einstellungen.</p>`}
+      ${G.visit.length ? `<p class="note" style="margin:0">Die Eingabeart lässt sich erst nach dieser Aufnahme wechseln.</p>` : ""}
+      <p class="muted small" style="margin:0">Dynamische Shortcuts zeigen links und rechts die Punktzahlen, die der Spieler am häufigsten wirft. Instant-Score zeigt beim Tippen schon den neuen Rest und einen Checkout-Weg.</p>
+      <div class="stack"><button class="btn" data-act="showRules">Regeln anzeigen</button><button class="btn btn-green btn-lg" data-act="closeModal">Weiterspielen</button></div>`;
   } else if (m.type === "bullQ") {
     h = `<h2>Check-out ${m.v}!</h2><p class="muted" style="margin:0">War der letzte Dart das Bull?</p>
       <div class="bigkeys"><button data-act="bullQ" data-v="0">Nein<small>anderes Doppel</small></button><button class="hit" data-act="bullQ" data-v="1">Ja<small>übers Bull</small></button></div>`;
@@ -1796,6 +1837,9 @@ const ACT = {
   setStarter(el){ if (!canPickStarter()) return; const i = +el.dataset.v; const rot = a => [...a.slice(i), ...a.slice(0, i)];
     G.pids = rot(G.pids); G.names = rot(G.names); G.p = rot(G.p); G.cur = 0; if (G.mode === "x01") G.legStarter = 0; persistGame(); render(); },
   setInput(el){ if (!G || G.visit.length) return; G.settings.input = el.dataset.v; UI.kp = ""; UI.mult = 1; persistGame(); render(); },
+  gameMenu(){ UI.modal = {type: "gmenu"}; render(); },
+  setDyn(el){ prefs.dynQuick = el.dataset.v; lsSet(LS_PREFS, prefs); render(); },
+  setInstant(el){ prefs.instant = el.dataset.v; lsSet(LS_PREFS, prefs); render(); },
   kd(el){ if (UI.kp.length >= 3) return; UI.kp = (UI.kp + el.dataset.v).replace(/^0+(?=\d)/, ""); render(); },
   kdel(){ UI.kp = UI.kp.slice(0, -1); render(); },
   kok(){ kpSubmit(parseInt(UI.kp || "0", 10)); },
