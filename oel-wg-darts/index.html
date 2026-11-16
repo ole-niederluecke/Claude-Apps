@@ -439,7 +439,7 @@ let S = lsGet(LS_DATA) || {players:[], history:[], tournaments:[]};
 S.players ||= []; S.history ||= []; S.tournaments ||= [];
 let G = lsGet(LS_GAME);
 const prefs = lsGet(LS_PREFS) || {};
-if (prefs.setupV !== 2) { delete prefs.setup; prefs.setupV = 2; lsSet(LS_PREFS, prefs); }
+if (prefs.setupV !== 3) { delete prefs.setup; prefs.setupV = 3; lsSet(LS_PREFS, prefs); }
 let UI = {view: "play", mode: null, setup: {}, sel: prefs.sel || [], kp: "", mult: 1, modal: null,
   cmp: prefs.cmp || [], statsCat: "multi", trainSolo: "all", tId: null, editP: null, bo: null,
   tf: {name:"", format:"ko", sel:[], start:501, outRule:"double", legs:2, shuffle:"yes", twice:"no", startMode:"bull"}};
@@ -587,14 +587,14 @@ const RULES = {
 };
 const RANKS_OPT = {k:"ranks", label:"Platzierungen", type:"seg", vals:[["no","Nein"],["yes","Ja"]], minPlayers:3};
 const DEFAULTS = {
-  x01:{start:501, outRule:"double", inRule:"straight", legs:1, sets:1, input:"visit", dblTrack:"yes", ranks:"no", startMode:"order"},
-  halveit:{startMode:"order"},
-  cricket:{variant:"standard", rounds:0, ranks:"no", startMode:"order"},
-  atc:{variant:"single", bull:"yes", ranks:"no", startMode:"order"},
-  bobs27:{startMode:"order"},
-  shanghai:{rounds:7, startMode:"order"},
-  score:{rounds:10, input:"visit", startMode:"order"},
-  c121:{start:121, attempts:10, input:"visit", startMode:"order"},
+  x01:{start:501, outRule:"double", inRule:"straight", legs:1, sets:1, input:"visit", dblTrack:"yes", ranks:"no", startMode:"bull"},
+  halveit:{startMode:"bull"},
+  cricket:{variant:"standard", rounds:0, ranks:"no", startMode:"bull"},
+  atc:{variant:"single", bull:"yes", ranks:"no", startMode:"bull"},
+  bobs27:{startMode:"bull"},
+  shanghai:{rounds:7, startMode:"bull"},
+  score:{rounds:10, input:"visit", startMode:"bull"},
+  c121:{start:121, attempts:10, input:"visit", startMode:"bull"},
 };
 const INPUT_OPT = {k:"input", label:"Eingabe", type:"seg", vals:[["visit","Summe"],["darts","Einzeldarts"]]};
 const OPTS = {
