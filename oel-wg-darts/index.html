@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
-<script>window.OELWG_STANDALONE = true; window.OELWG_VERSION = "16.11.2026 19:45";</script>
+<script>window.OELWG_STANDALONE = true; window.OELWG_VERSION = "16.11.2026 21:51";</script>
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;overscroll-behavior:none}
@@ -290,8 +290,17 @@ button.pc{cursor:pointer}
 .pc-legs{font-size:12.5px;color:var(--muted);white-space:nowrap}
 .pc-big{font-family:var(--display);font-weight:700;font-size:clamp(52px,15vw,84px);line-height:.95;letter-spacing:-.01em}
 /* three or more players: keep big cards, two per row, the board scrolls */
+/* three or more players: one row of two big cards, swipe sideways for the rest */
 .pcs:not(.n1){grid-template-columns:repeat(2,minmax(0,1fr))}
-.game .board{min-height:clamp(150px,27vh,240px)}
+.pcs:not(.n1):not(.n2){display:flex;overflow-x:auto;scroll-snap-type:x mandatory;position:relative;scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+.pcs:not(.n1):not(.n2)::-webkit-scrollbar{display:none}
+.pcs:not(.n1):not(.n2) > .pc{flex:0 0 calc(50% - 5px);scroll-snap-align:start}
+.peek{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin-bottom:8px}
+.peek::-webkit-scrollbar{display:none}
+.peek button{flex:none;display:flex;align-items:baseline;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;white-space:nowrap}
+.peek button b{font-family:var(--display);font-size:17px}
+.peek button.on{border-color:var(--red);color:var(--red)}
+.peek button.out{opacity:.5}
 .pc-co{font-family:var(--display);font-size:18px;font-weight:600;color:var(--green);min-height:22px;letter-spacing:.04em}
 .pc-place{font-family:var(--display);font-size:18px;font-weight:700;color:var(--gold)}
 .pc-meta{font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px}
@@ -319,11 +328,23 @@ button.pc{cursor:pointer}
 .mk{width:30px;height:30px;color:var(--fg)}
 .mk.c{color:var(--green)}
 
-.pad{flex:1 0 auto;display:flex;flex-direction:column;background:var(--surface);border-top:1px solid var(--line);padding-block:8px 12px}
+.pad{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--surface);border-top:1px solid var(--line);padding-block:8px 12px}
 .pad .wrap{flex:1;display:flex;flex-direction:column;gap:7px}
 .game .board{flex:0 1 auto}
 /* the keys grow into free height (capped), so there is no empty gap above the input */
-.pad .kgrid,.pad .dkeys{flex:1;grid-auto-rows:minmax(44px,1fr);max-height:400px}
+.pad .kgrid,.pad .dkeys{flex:1;grid-auto-rows:minmax(34px,1fr);max-height:400px;min-height:0}
+/* player cards are always shown whole; the keypad takes what is left */
+.game .board:has(.pcs){flex:0 0 auto}
+.kdisp output::before{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-height:700px){
+  .pc{padding:9px 12px}
+  .pc-big{font-size:clamp(44px,13vw,64px)}
+  .pc-co{min-height:18px;font-size:16px}
+  .kdisp output,.kdisp .rest{height:42px}
+  .kdisp output{font-size:30px}
+  .peek{margin-bottom:6px}
+  .ghead{padding-block:4px}
+}
 .pad .kgrid button,.pad .dkeys button{height:auto}
 .pad .bigkeys,.pad .kpad{flex:1;grid-auto-rows:minmax(64px,1fr);max-height:260px}
 .pad .bigkeys button{height:auto}
@@ -338,7 +359,7 @@ button.pc{cursor:pointer}
 .kgrid .ok{background:var(--fg);color:var(--bg);border-color:var(--fg);font-family:var(--body);font-size:15px}
 .kdisp output .kprev{margin-right:auto;font-family:var(--body);font-size:13px;font-weight:600;color:var(--green);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;padding-right:8px}
 .kdisp output .kprev.bad{color:var(--red)}
-.kdisp output:has(span:empty:only-child)::before{content:attr(data-ph);color:var(--muted);font-size:17px;font-weight:500;font-family:var(--body)}
+.kdisp output:has(span:empty:only-child)::before{content:attr(data-ph);color:var(--muted);font-size:15px;font-weight:500;font-family:var(--body)}
 .gmenu{min-width:40px;font-size:18px;font-weight:700;padding-inline:10px}
 .kdisp output{flex:1;min-width:0;display:flex;height:48px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);align-items:center;justify-content:flex-end;padding:0 14px;font-family:var(--display);font-size:34px;font-weight:700}
 .kdisp output:empty::before{content:attr(data-ph);color:var(--muted);font-size:17px;font-weight:500;font-family:var(--body)}
@@ -967,6 +988,7 @@ const starterHint = () => canPickStarter() ? `<p class="hint">Tippe auf einen Sp
 
 const ENGINES = {
   x01: {
+    peek: (G, i) => G.p[i].fin ? "✓" : G.p[i].rem,
     init(G){
       const st = G.settings; if (st.inRule === "double") st.input = "darts";
       G.p = G.pids.map(() => ({rem: st.start, legs: 0, sets: 0, isIn: st.inRule !== "double", legDarts: 0, last: null,
@@ -1016,6 +1038,7 @@ const ENGINES = {
     row: (G, i) => { const p = G.p[i]; return [p.pts, p.mk, fmt1(p.darts ? p.mk / p.darts * 3 : 0)]; },
   },
   atc: {
+    peek: (G, i) => { const T = atcTargets(G.settings), p = G.p[i]; return p.idx < T.length ? atcLabel(G.settings, T[p.idx]) : "✓"; },
     init(G){ G.p = G.pids.map(() => ({idx: 0, darts: 0, hits: 0})); },
     title(G){ return `Around the Clock · ${OPTS.atc[0].vals.find(v => v[0] === G.settings.variant)[1]}`; },
     board(G){
@@ -1038,6 +1061,7 @@ const ENGINES = {
     row: (G, i) => { const p = G.p[i]; return [`${p.idx}/${atcTargets(G.settings).length}`, p.darts, pct(p.hits, p.darts)]; },
   },
   bobs27: {
+    peek: (G, i) => G.p[i].score,
     init(G){ G.p = G.pids.map(() => ({score: 27, idx: 0, out: false, done: false, hits: 0, darts: 0, hist: []})); },
     title(G){ const t = BOB_T[G.p[G.cur].idx]; return `Bob's 27 · ${t == null ? "Ende" : t === 25 ? "Bull" : "D" + t}`; },
     board(G){
@@ -1057,6 +1081,7 @@ const ENGINES = {
     row: (G, i) => { const p = G.p[i]; return [p.score, p.hits, pct(p.hits, p.darts)]; },
   },
   shanghai: {
+    peek: (G, i) => G.p[i].score,
     init(G){ G.p = G.pids.map(() => ({score: 0, darts: 0, hist: []})); },
     title(G){ return `Shanghai · Zahl ${G.round} von ${G.settings.rounds}`; },
     board(G){
@@ -1076,6 +1101,7 @@ const ENGINES = {
     row: (G, i) => [G.p[i].score + (G.shanghai === i ? " (Shanghai!)" : ""), G.p[i].darts],
   },
   score: {
+    peek: (G, i) => G.p[i].total,
     init(G){ G.p = G.pids.map(() => ({total: 0, visits: [], darts: 0})); },
     title(G){ return `Score-Training · Aufnahme ${G.round}/${G.settings.rounds}`; },
     board(G){
@@ -1094,6 +1120,7 @@ const ENGINES = {
     row: (G, i) => { const p = G.p[i]; return [p.total, fmt1(p.visits.length ? p.total / p.visits.length : 0), p.visits.length ? Math.max(...p.visits) : "–"]; },
   },
   c121: {
+    peek: (G, i) => G.p[i].rem,
     init(G){ const s = G.settings.start; G.p = G.pids.map(() => ({target: s, rem: s, att: 1, vInAtt: 0, succ: 0, best: 0, hist: [], darts: 0, done: false})); },
     title(G){ const p = G.p[G.cur]; return `Checkout ${p.target} · Versuch ${Math.min(p.att, G.settings.attempts)}/${G.settings.attempts}`; },
     board(G){
@@ -1117,6 +1144,7 @@ const ENGINES = {
   },
 };
 ENGINES.halveit = {
+  peek: (G, i) => G.p[i].score,
   init(G){ G.p = G.pids.map(() => ({score: 40, hist: [], darts: 0, zeros: 0})); },
   title(G){ return `Halve-It · Runde ${G.round}/${HALVE_T.length} · ${halveLabel(HALVE_T[G.round - 1])}`; },
   board(G){
@@ -1637,11 +1665,21 @@ function viewTDetail(){
     ${delBtn("T", T.id)}</div>
     ${champ}${body}`;
 }
+/* all players at a glance above the cards; a tap brings that card into view */
+function peekRow(E){
+  return `<div class="peek" role="list">${G.pids.map((_, i) => `<button role="listitem" class="${i === G.cur && !G.finished ? "on" : ""} ${inactive(i) ? "out" : ""}" data-act="peek" data-v="${i}">${esc(G.names[i])} <b class="num">${esc(String(E.peek(G, i)))}</b></button>`).join("")}</div>`;
+}
+/* keep the player who throws as the first of the two visible cards */
+function showActive(i){
+  const strip = $(".board .pcs"), cards = strip ? strip.querySelectorAll(":scope > .pc") : [];
+  if (!strip || G.pids.length < 3 || !cards.length) return;
+  const card = cards[i ?? G.cur]; if (card) strip.scrollLeft = card.offsetLeft;
+}
 function renderGame(){
   const E = ENGINES[G.mode];
   return `<div class="game">
     <div class="wrap ghead"><button class="btn btn-sm btn-quiet" data-act="askQuit">✕ Menü</button><div class="gt">${esc(E.title(G))}</div><button class="btn btn-sm" data-act="undo" ${G.undo.length ? "" : "disabled"}>↶ Zurück</button><button class="btn btn-sm gmenu" data-act="gameMenu" aria-label="Spieleinstellungen">⋯</button></div>
-    <div class="board"><div class="wrap">${E.board(G)}</div></div>
+    <div class="board"><div class="wrap">${G.pids.length > 2 && E.peek ? peekRow(E) : ""}${E.board(G)}</div></div>
     <div class="pad"><div class="wrap">${G.finished ? "" : padTop() + E.pad(G)}</div></div></div>`;
 }
 function render(){
@@ -1649,7 +1687,7 @@ function render(){
   if (UI.view === "game" && G) {
     if (G.finished && !UI.modal) UI.modal = {type: "finish"};
     app.innerHTML = renderGame();
-    const on = $(".board .pc.on"); if (on && G.pids.length > 2) on.scrollIntoView({block: "nearest"});
+    showActive();
   } else {
     if (UI.view === "game" || (UI.view === "bulloff" && !UI.bo)) UI.view = "play";
     const v = UI.view;
@@ -1837,6 +1875,7 @@ const ACT = {
   setStarter(el){ if (!canPickStarter()) return; const i = +el.dataset.v; const rot = a => [...a.slice(i), ...a.slice(0, i)];
     G.pids = rot(G.pids); G.names = rot(G.names); G.p = rot(G.p); G.cur = 0; if (G.mode === "x01") G.legStarter = 0; persistGame(); render(); },
   setInput(el){ if (!G || G.visit.length) return; G.settings.input = el.dataset.v; UI.kp = ""; UI.mult = 1; persistGame(); render(); },
+  peek(el){ showActive(+el.dataset.v); },
   gameMenu(){ UI.modal = {type: "gmenu"}; render(); },
   setDyn(el){ prefs.dynQuick = el.dataset.v; lsSet(LS_PREFS, prefs); render(); },
   setInstant(el){ prefs.instant = el.dataset.v; lsSet(LS_PREFS, prefs); render(); },
