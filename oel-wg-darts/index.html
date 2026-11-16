@@ -382,13 +382,26 @@ button.pc{cursor:pointer}
 .sheet h2{margin:0;font-family:var(--display);font-size:30px;line-height:1.05}
 .sheet .stack{display:flex;flex-direction:column;gap:8px}
 .winner{font-family:var(--display);font-size:20px;font-weight:600;color:var(--green)}
-.fx{position:fixed;left:50%;top:38%;transform:translate(-50%,-50%);z-index:35;pointer-events:none;text-align:center;width:min(92vw,520px);padding:18px 20px;border-radius:18px;background:var(--fg);color:var(--bg);box-shadow:0 18px 50px rgba(0,0,0,.35);animation:fxin .35s cubic-bezier(.2,1.6,.4,1) both, fxout .35s ease-in 1.95s forwards}
+/* Effects: four looks, picked at random; all slightly see-through */
+.fx{position:fixed;z-index:35;pointer-events:none;text-align:center;--fxc:var(--fg);--fxo:var(--bg)}
+.fx.wash{--fxc:var(--green);--fxo:var(--on-green)}
+.fx.rage{--fxc:var(--red);--fxo:var(--on-red)}
 .fx-t{font-family:var(--display);font-weight:700;font-size:clamp(30px,9vw,46px);line-height:1.02;text-wrap:balance}
-.fx-s{margin-top:6px;font-size:14px;opacity:.75}
-.fx.wash{background:var(--green);color:var(--on-green)}
+.fx-s{margin-top:6px;font-size:14px;opacity:.85}
+.fx.box{left:50%;top:38%;transform:translate(-50%,-50%);width:min(88vw,480px);padding:16px 18px;border-radius:18px;background:var(--fxc);background:color-mix(in srgb,var(--fxc) 70%,transparent);color:var(--fxo);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);box-shadow:0 14px 40px rgba(0,0,0,.22);animation:fxin .35s cubic-bezier(.2,1.6,.4,1) both, fxout .35s ease-in 1.95s forwards}
+.fx.banner{left:0;right:0;top:34%;padding:14px max(16px,env(safe-area-inset-right,0px)) 14px max(16px,env(safe-area-inset-left,0px));background:var(--fxc);background:color-mix(in srgb,var(--fxc) 68%,transparent);color:var(--fxo);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);transform:skewY(-4deg);animation:slidein .4s ease-out both, fxfade .35s ease-in 1.95s forwards}
+.fx.stamp{left:50%;top:40%;width:min(84vw,430px);padding:12px 16px;border:5px solid var(--fxc);border-radius:12px;color:var(--fxc);background:var(--surface);background:color-mix(in srgb,var(--surface) 55%,transparent);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);transform:translate(-50%,-50%) rotate(-8deg);animation:thump .32s cubic-bezier(.3,1.8,.5,1) both, fxfade .35s ease-in 1.95s forwards}
+.fx.stamp .fx-t{text-transform:uppercase;letter-spacing:.02em}
+.fx.burst{left:50%;top:40%;transform:translate(-50%,-50%);width:min(90vw,480px);color:var(--fxc);text-shadow:0 2px 0 var(--bg),0 0 16px var(--bg),0 0 28px var(--bg);animation:fxin .35s cubic-bezier(.2,1.6,.4,1) both, fxout .35s ease-in 1.95s forwards}
+.fx.burst .fx-s{color:var(--fg)}
+.fx.burst .fx-t{font-size:clamp(42px,13vw,64px)}
+.fx.burst i{position:absolute;left:50%;top:50%;width:15px;height:15px;margin:-7px;border-radius:50%;opacity:.85;animation:fly 1s ease-out both}
 .fx.wash .fx-t{animation:spin 1.2s ease-in-out .2s 1}
-.fx.rage{background:var(--red);color:var(--on-red)}
 .fx.rage .fx-t{animation:shake .45s ease-in-out .25s 2}
+@keyframes fly{from{transform:translate(0,0) scale(1)}to{transform:translate(var(--dx),var(--dy)) scale(.3);opacity:0}}
+@keyframes slidein{from{transform:skewY(-4deg) translateX(-105%)}to{transform:skewY(-4deg) translateX(0)}}
+@keyframes thump{from{transform:translate(-50%,-50%) rotate(-8deg) scale(1.9);opacity:0}to{transform:translate(-50%,-50%) rotate(-8deg) scale(1);opacity:1}}
+@keyframes fxfade{to{opacity:0}}
 @keyframes fxin{from{opacity:0;transform:translate(-50%,-50%) scale(.6)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
 @keyframes fxout{to{opacity:0;transform:translate(-50%,-50%) scale(.92)}}
 @keyframes spin{0%{transform:rotate(0)}40%{transform:rotate(-8deg)}70%{transform:rotate(8deg)}100%{transform:rotate(0)}}
@@ -1929,16 +1942,19 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 /* ================= Fun effects ================= */
 const pickOne = a => a[Math.floor(Math.random() * a.length)];
 let fxQueue = [], fxBusy = false, fxTimer = null;
-function fx(text, sub = "", kind = "", now = false){
+function fx(text, sub = "", kind = "", now = false, look = ""){
   if (wgCfg().fx === false) return;
   if (now) { fxQueue = fxQueue.filter(f => f.kind === "rage"); clearTimeout(fxTimer); fxBusy = false; }
-  fxQueue.push({text, sub, kind}); if (!fxBusy) fxNext();
+  fxQueue.push({text, sub, kind, look}); if (!fxBusy) fxNext();
 }
 function fxNext(){
   const el = $("#fx"), f = fxQueue.shift();
   if (!f) { fxBusy = false; el.innerHTML = ""; return; }
   fxBusy = true;
-  el.innerHTML = `<div class="fx ${f.kind}" role="status"><div class="fx-t">${esc(f.text)}</div>${f.sub ? `<div class="fx-s">${esc(f.sub)}</div>` : ""}</div>`;
+  const look = f.look || pickOne(["box", "banner", "stamp", "burst"]);
+  const dots = look === "burst" ? Array.from({length: 16}, (_, k) => { const a = k / 16 * Math.PI * 2, r = 120 + Math.random() * 90;
+    return `<i style="--dx:${Math.round(Math.cos(a) * r)}px;--dy:${Math.round(Math.sin(a) * r)}px;background:var(--${["red", "green", "gold"][k % 3]})"></i>`; }).join("") : "";
+  el.innerHTML = `<div class="fx ${f.kind} ${look}" role="status">${dots}<div class="fx-t">${esc(f.text)}</div>${f.sub ? `<div class="fx-s">${esc(f.sub)}</div>` : ""}</div>`;
   fxTimer = setTimeout(fxNext, 2300);
 }
 /* weak scoring: after at least three visits in a leg, still far from the finish, leg average under 30 */
@@ -1961,14 +1977,16 @@ const RAGE = [
 ];
 const DOOR = ["Türzerstörung incoming …", "Bitte Gläser in Sicherheit bringen", "Doppelstrich! Jemand informiert den Vermieter", "Das gibt Ärger am Kühlschrank"];
 function endFx(){
-  if (G.pids.length < 2) return;
-  const losers = G.order.slice(1).map(i => G.names[i]), members = wgCfg().members;
+  if (G.pids.length < 2 || wgCfg().fx === false) return;
   fxQueue = fxQueue.filter(f => f.kind === "rage"); if (fxBusy && !$("#fx .fx.rage")) { clearTimeout(fxTimer); fxBusy = false; }
-  if (G.wgResult && G.wgResult.strokes >= 2) fx(pickOne(DOOR), `${G.wgResult.strokes} Striche für ${G.names[G.order[0]]}`, "rage");
-  const ole = losers.find(n => isName(n, "ole"));
-  if (ole) fx("MAAAN, das kann doch nicht sein!", ole, "rage");
-  const rival = G.order.slice(1).filter(i => members.includes(G.pids[i]) && !isName(G.names[i], "ole")).map(i => G.names[i]);
-  if (rival.length) { const n = rival[rival.length - 1].trim(); fx(pickOne(RAGE)(n), "", "rage"); }
+  const last = G.order[G.order.length - 1], name = G.names[last].trim(), members = wgCfg().members;
+  const out = [];
+  if (G.wgResult && G.wgResult.strokes >= 2) out.push([pickOne(DOOR), `${G.wgResult.strokes} Striche für ${G.names[G.order[0]]}`]);
+  if (isName(name, "ole")) out.push(["MAAAN, das kann doch nicht sein!", `${name} wird ${G.order.length > 2 ? "Dritter" : "Zweiter"}`]);
+  else if (members.includes(G.pids[last])) out.push([pickOne(RAGE)(name), ""]);
+  if (!out.length) return;
+  out.slice(0, 2).forEach(([t, sub]) => fx(t, sub, "rage", false, pickOne(["stamp", "banner", "burst"])));
+  try { navigator.vibrate && navigator.vibrate([90, 60, 90, 60, 220]); } catch (e) {}
 }
 function strokesSVG(n){
   let out = "", x = 0;
