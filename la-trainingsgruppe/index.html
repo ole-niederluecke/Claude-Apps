@@ -1,0 +1,964 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Trainingsgruppe</title>
+<meta name="theme-color" content="#F4F2EE">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Training">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&display=swap">
+<script src="config.js"></script>
+<script src="vendor/supabase-2.118.0.js"></script>
+<style>
+:root{
+  --bg:#F4F2EE; --surface:#FFFFFF; --surface-2:#EEEAE3; --line:#DDD7CD; --fg:#1C1A17; --muted:#6A635A;
+  --accent:#B83A1F; --on-accent:#FFFFFF; --accent-soft:#F6E2DA;
+  --ok:#1F7A4D; --ok-soft:#DDEFE4; --warn:#8F6200; --warn-soft:#F7ECCF; --danger:#B3261E; --danger-soft:#F8E0DE;
+  --field:#2E7848;
+  --display:"Barlow Condensed","Arial Narrow",sans-serif;
+  --body:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --r:14px; --nav-h:64px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121110; --surface:#1C1A18; --surface-2:#262320; --line:#38332E; --fg:#EFEBE5; --muted:#A79F95;
+    --accent:#F2835F; --on-accent:#2B0C03; --accent-soft:#3D231A;
+    --ok:#5FCB92; --ok-soft:#15301F; --warn:#E8B84E; --warn-soft:#3A2E12; --danger:#FF8A80; --danger-soft:#3E1B19;
+    --field:#4FA86E; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121110; --surface:#1C1A18; --surface-2:#262320; --line:#38332E; --fg:#EFEBE5; --muted:#A79F95;
+  --accent:#F2835F; --on-accent:#2B0C03; --accent-soft:#3D231A;
+  --ok:#5FCB92; --ok-soft:#15301F; --warn:#E8B84E; --warn-soft:#3A2E12; --danger:#FF8A80; --danger-soft:#3E1B19;
+  --field:#4FA86E; color-scheme:dark;
+}
+html{font-size:16px} html[data-text="large"]{font-size:18.5px}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--fg);font:400 .95rem/1.5 var(--body);-webkit-tap-highlight-color:transparent;
+  padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 24px)}
+body.no-nav{padding-bottom:24px}
+[hidden]{display:none!important}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none}
+button:disabled{opacity:.5;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+a{color:var(--accent)}
+
+/* Kopfzeile */
+.top{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line);
+  padding:calc(env(safe-area-inset-top,0px) + 10px) 16px 10px}
+.top-in{max-width:680px;margin:0 auto;display:flex;align-items:center;gap:12px}
+.logo{width:34px;height:34px;border-radius:9px;flex:none}
+.top h1{font:700 1.45rem/1.05 var(--display);letter-spacing:.02em;text-transform:uppercase;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top .sub{font-size:.78rem;color:var(--muted)}
+.top .grow{flex:1;min-width:0}
+
+main{max-width:680px;margin:0 auto;padding:16px}
+h2{font:700 1.25rem/1.1 var(--display);text-transform:uppercase;letter-spacing:.03em;margin:22px 4px 10px}
+h2:first-child{margin-top:4px}
+h3{font-size:1rem;margin:0 0 4px}
+p{margin:0 0 10px}
+.muted{color:var(--muted)} .small{font-size:.82rem}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:12px}
+.card.flush{padding:4px 0}
+.hero{position:relative;overflow:hidden}
+.hero::after{content:"";position:absolute;right:-60px;top:-60px;width:180px;height:180px;border-radius:50%;
+  border:10px solid var(--accent-soft);box-shadow:0 0 0 14px var(--surface),0 0 0 24px var(--accent-soft),0 0 0 28px var(--surface),0 0 0 38px var(--accent-soft);pointer-events:none}
+.hero h3{font:700 1.7rem/1.1 var(--display);margin-bottom:8px;position:relative;z-index:1}
+.hero > *{position:relative;z-index:1}
+
+.row{display:flex;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--line);min-height:56px}
+.row:first-child{border-top:0}
+button.row{width:100%;text-align:left}
+button.row:hover{background:var(--surface-2)}
+.row .grow{flex:1;min-width:0}
+.row .name,.row .meta{display:block}
+.row .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .meta{font-size:.8rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.avatar{width:38px;height:38px;border-radius:50%;flex:none;display:grid;place-items:center;font-weight:700;font-size:.85rem;
+  background:var(--surface-2);color:var(--fg)}
+.avatar.admin{background:var(--accent);color:var(--on-accent)}
+.avatar.trainer{background:var(--field);color:#fff}
+.chev{color:var(--muted);flex:none}
+.subhead{padding:12px 16px 4px;font-size:.75rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border-top:1px solid var(--line)}
+.subhead:first-child{border-top:0}
+
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:.72rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
+.chip.admin{background:var(--accent-soft);color:var(--accent)}
+.chip.trainer{background:var(--ok-soft);color:var(--ok)}
+.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.off{background:var(--danger-soft);color:var(--danger)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:12px;
+  background:var(--accent);color:var(--on-accent);font-weight:600}
+.btn.ghost{background:var(--surface-2);color:var(--fg)}
+.btn.danger{background:var(--danger-soft);color:var(--danger)}
+.btn.ok{background:var(--ok);color:#fff}
+.btn.sm{min-height:36px;padding:0 12px;font-size:.85rem;border-radius:10px}
+.btn.block{width:100%}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.btns .btn{flex:1 1 auto}
+.linkbtn{color:var(--accent);font-weight:600;padding:6px 2px}
+.iconbtn{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:var(--muted);flex:none}
+.iconbtn:hover{background:var(--surface-2);color:var(--fg)}
+
+label.f{display:block;margin-bottom:12px}
+label.f > span{display:block;font-size:.82rem;font-weight:600;margin-bottom:5px}
+input[type=text],input[type=email],input[type=password],input[type=url],select{width:100%;min-height:46px;padding:10px 12px;
+  border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--fg)}
+input:focus,select:focus{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
+input[readonly]{background:var(--surface-2);color:var(--muted)}
+.hint{font-size:.8rem;color:var(--muted);margin-top:4px}
+
+.seg{display:flex;background:var(--surface-2);border-radius:12px;padding:3px;gap:3px}
+.seg button{flex:1;min-height:38px;border-radius:9px;font-weight:600;font-size:.88rem;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--fg);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+
+.opt{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;cursor:pointer}
+.opt input{margin-top:3px;accent-color:var(--accent);width:18px;height:18px;flex:none}
+.opt b{display:block}
+.opt:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+
+.setrow{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)}
+.setrow:first-child{border-top:0}
+.setrow .grow{flex:1;min-width:0}
+
+.notice{display:flex;gap:12px;align-items:center;padding:14px 16px;border-radius:var(--r);background:var(--warn-soft);color:var(--fg);margin-bottom:12px}
+.notice .grow{flex:1}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stat{background:var(--surface-2);border-radius:12px;padding:10px 12px}
+.stat b{display:block;font:700 1.7rem/1 var(--display)}
+.stat span{font-size:.75rem;color:var(--muted)}
+.soon li{padding:6px 0;color:var(--muted)}
+.soon{margin:0;padding-left:18px}
+
+/* Navigation unten */
+nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--surface);border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom,0px)}
+nav.tabs .in{max-width:680px;margin:0 auto;display:flex;height:var(--nav-h)}
+nav.tabs button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:.72rem;font-weight:600;color:var(--muted);position:relative}
+nav.tabs button[aria-current="page"]{color:var(--accent)}
+nav.tabs button[aria-current="page"]::before{content:"";position:absolute;top:0;left:30%;right:30%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+nav.tabs svg{width:24px;height:24px}
+.badge{position:absolute;top:8px;left:calc(50% + 6px);min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--on-accent);font-size:.68rem;display:grid;place-items:center}
+
+/* Anmeldung */
+.auth{max-width:420px;margin:0 auto;padding:calc(env(safe-area-inset-top,0px) + 32px) 16px 24px}
+.auth .brand{display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:22px}
+.auth .brand img{width:72px;height:72px;border-radius:18px;margin-bottom:12px}
+.auth .brand h1{font:700 2rem/1 var(--display);text-transform:uppercase;letter-spacing:.03em;margin:0 0 4px}
+.err{background:var(--danger-soft);color:var(--danger);border-radius:10px;padding:10px 12px;font-size:.88rem;margin-bottom:12px}
+.okmsg{background:var(--ok-soft);color:var(--ok);border-radius:10px;padding:10px 12px;font-size:.88rem;margin-bottom:12px}
+
+.demo-bar{background:var(--warn-soft);border-bottom:1px solid var(--line);padding:8px 16px;font-size:.85rem}
+.demo-bar .in{max-width:680px;margin:0 auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.demo-bar select{min-height:34px;padding:4px 8px;width:auto;flex:1;min-width:150px}
+
+/* Dialog */
+dialog.sheet{border:0;padding:0;margin:auto auto 0;width:100%;max-width:520px;max-height:90vh;border-radius:20px 20px 0 0;
+  background:var(--surface);color:var(--fg);box-shadow:0 -8px 40px rgba(0,0,0,.25)}
+@media (min-width:600px){dialog.sheet{margin:auto;border-radius:20px}}
+dialog.sheet::backdrop{background:rgba(0,0,0,.45)}
+dialog .sheet-in{padding:20px 20px calc(20px + env(safe-area-inset-bottom,0px));overflow:auto;max-height:90vh}
+dialog h3{font:700 1.4rem/1.1 var(--display);text-transform:uppercase;letter-spacing:.02em;margin:0 0 14px}
+
+.toast{position:fixed;left:50%;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 14px);transform:translateX(-50%) translateY(20px);
+  background:var(--fg);color:var(--bg);padding:11px 16px;border-radius:12px;font-size:.9rem;font-weight:500;max-width:calc(100% - 32px);
+  opacity:0;transition:opacity .2s,transform .2s;z-index:100;pointer-events:none}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.error{background:var(--danger);color:#fff}
+.loading{display:grid;place-items:center;min-height:60vh;color:var(--muted)}
+</style>
+</head>
+<body class="no-nav">
+<div id="app"><div class="loading">Lädt …</div></div>
+<dialog class="sheet" id="dlg"><div class="sheet-in" id="dlg-body"></div></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+const VERSION = "17.11.2026 · 1";
+const APP_ID = "la-trainingsgruppe";
+
+/* ───────────── Hilfen ───────────── */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const clone = o => o == null ? o : JSON.parse(JSON.stringify(o));
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem(k); } catch {} }
+};
+const appUrl = () => location.origin + location.pathname;
+const initials = n => (String(n || "?").trim().split(/\s+/).map(w => w[0]).join("").slice(0, 2) || "?").toUpperCase();
+const firstName = n => String(n || "").trim().split(/\s+/)[0] || "du";
+const ROLE_LABEL = { admin: "Admin", trainer: "Trainer", athlete: "Athlet" };
+const byName = (a, b) => (a.display_name || "").localeCompare(b.display_name || "", "de", { sensitivity: "base" });
+
+function deErr(e) {
+  const m = (e && (e.message || e.error_description)) || String(e || "Unbekannter Fehler");
+  const map = [
+    [/Invalid login credentials/i, "E-Mail oder Passwort ist falsch."],
+    [/Email not confirmed/i, "Bitte bestätige zuerst deine E-Mail-Adresse (Link in der Mail)."],
+    [/already registered|already been registered|user already exists/i, "Für diese E-Mail gibt es schon ein Konto."],
+    [/Password should be at least (\d+)/i, (_, n) => `Das Passwort muss mindestens ${n} Zeichen haben.`],
+    [/New password should be different/i, "Das neue Passwort muss sich vom alten unterscheiden."],
+    [/rate limit|too many requests|security purposes/i, "Zu viele Versuche. Bitte warte ein paar Minuten."],
+    [/Failed to fetch|NetworkError|Load failed|network/i, "Keine Verbindung zum Server. Bist du online?"],
+    [/JSON object requested|contain 0 rows|no rows/i, "Keine Berechtigung für diese Änderung."],
+    [/row-level security|permission denied/i, "Keine Berechtigung für diese Änderung."],
+    [/plan_groups_name_key|duplicate key/i, "Eine Trainingsgruppe mit diesem Namen gibt es schon."],
+    [/valid email|invalid format|Unable to validate email/i, "Bitte gib eine gültige E-Mail-Adresse ein."],
+    [/Invalid API key|No API key/i, "Der Supabase-Schlüssel ist ungültig."]
+  ];
+  for (const [re, t] of map) { const x = m.match(re); if (x) return typeof t === "function" ? t(...x) : t; }
+  return m;
+}
+
+function toast(msg, kind) {
+  const t = $("#toast");
+  t.textContent = msg; t.className = "toast show" + (kind ? " " + kind : "");
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.className = "toast", kind === "error" ? 4500 : 2600);
+}
+
+function download(name, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+const stamp = () => new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "-");
+
+/* ───────────── Darstellung (pro Gerät) ───────────── */
+const prefs = Object.assign({ theme: "system", textSize: "normal" }, LS.get("la_prefs", {}));
+const darkMq = matchMedia("(prefers-color-scheme: dark)");
+function applyPrefs() {
+  const r = document.documentElement;
+  if (prefs.theme === "system") r.removeAttribute("data-theme"); else r.setAttribute("data-theme", prefs.theme);
+  r.dataset.text = prefs.textSize;
+  const dark = prefs.theme === "dark" || (prefs.theme === "system" && darkMq.matches);
+  document.querySelector('meta[name="theme-color"]').content = dark ? "#121110" : "#F4F2EE";
+}
+darkMq.addEventListener?.("change", applyPrefs);
+function setPref(k, v) { prefs[k] = v; LS.set("la_prefs", prefs); applyPrefs(); render(); }
+
+/* ───────────── Backend: Supabase ───────────── */
+function makeSupabaseBackend(url, key) {
+  const sb = window.supabase.createClient(url, key, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "implicit", storageKey: "la-auth" }
+  });
+  const ok = r => { if (r.error) throw r.error; return r.data; };
+  return {
+    kind: "supabase", host: new URL(url).host,
+    async session() { return ok(await sb.auth.getSession()).session; },
+    onAuth(cb) { sb.auth.onAuthStateChange((ev, s) => setTimeout(() => cb(ev, s), 0)); },
+    async signIn(email, password) { return ok(await sb.auth.signInWithPassword({ email, password })).session; },
+    async signUp(email, password, name) {
+      const d = ok(await sb.auth.signUp({ email, password, options: { data: { display_name: name }, emailRedirectTo: appUrl() } }));
+      if (d.user && Array.isArray(d.user.identities) && d.user.identities.length === 0) throw new Error("User already registered");
+      return d.session;
+    },
+    async signOut() { await sb.auth.signOut(); },
+    async resetPassword(email) { ok(await sb.auth.resetPasswordForEmail(email, { redirectTo: appUrl() })); },
+    async setPassword(password) { ok(await sb.auth.updateUser({ password })); },
+    async myProfile(id) { return ok(await sb.from("profiles").select("*").eq("id", id).maybeSingle()); },
+    async profiles() { return ok(await sb.from("profiles").select("*")); },
+    async emails() { return ok(await sb.rpc("member_emails")) || []; },
+    async updateProfile(id, patch) { return ok(await sb.from("profiles").update(patch).eq("id", id).select().single()); },
+    async deleteUser(id) { ok(await sb.rpc("delete_user", { target: id })); },
+    async settings() { return ok(await sb.from("team_settings").select("*").eq("id", 1).maybeSingle()); },
+    async updateSettings(patch) { return ok(await sb.from("team_settings").update(patch).eq("id", 1).select().single()); },
+    async groups() { return ok(await sb.from("plan_groups").select("*").order("sort_order").order("name")); },
+    async insertGroup(row) { return ok(await sb.from("plan_groups").insert(row).select().single()); },
+    async updateGroup(id, patch) { return ok(await sb.from("plan_groups").update(patch).eq("id", id).select().single()); },
+    async deleteGroup(id) { ok(await sb.from("plan_groups").delete().eq("id", id)); }
+  };
+}
+
+/* ───────────── Backend: Demo (nur dieses Gerät) ─────────────
+   Bildet dieselben Regeln nach wie supabase/01_grundlage.sql, damit man alles gefahrlos ausprobieren kann. */
+function makeDemoBackend() {
+  const KEY = "la_demo_db";
+  const seed = () => {
+    const g = (id, name, s) => ({ id, name, sort_order: s });
+    const p = (id, display_name, role, approved, plan_group_id) => ({ id, display_name, role, approved, plan_group_id, created_at: new Date().toISOString() });
+    return {
+      settings: { id: 1, team_name: "Demo-Trainingsgruppe", plan_visibility: "all" },
+      groups: [g("g1", "Kurzsprint", 1), g("g2", "Langsprint", 2), g("g3", "Stab", 3), g("g4", "Alternativplan", 4)],
+      profiles: [
+        p("u-admin", "Alex Admin", "admin", true, "g1"), p("u-trainer", "Toni Trainer", "trainer", true, null),
+        p("u1", "Lena Berger", "athlete", true, "g1"), p("u2", "Jonas Keller", "athlete", true, "g1"),
+        p("u3", "Mia Schulz", "athlete", true, "g2"), p("u4", "Paul Wagner", "athlete", true, "g2"),
+        p("u5", "Sara Neumann", "athlete", true, "g3"), p("u6", "Noah Fischer", "athlete", true, null),
+        p("u7", "Kim Neu", "athlete", false, null)
+      ]
+    };
+  };
+  let db = LS.get(KEY, null) || seed();
+  const save = () => LS.set(KEY, db);
+  const uid = () => LS.get("la_demo_user", "u-admin");
+  const meRow = () => db.profiles.find(p => p.id === uid());
+  const myRole = () => { const m = meRow(); return m && m.approved ? m.role : null; };
+  const staff = () => ["admin", "trainer"].includes(myRole());
+  const deny = msg => { throw new Error(msg || "Keine Berechtigung für diese Änderung."); };
+  const otherAdmins = id => db.profiles.some(p => p.role === "admin" && p.approved && p.id !== id);
+  const email = p => p.id.replace("u-", "") + "@beispiel.de";
+  const wait = () => new Promise(r => setTimeout(r, 60));
+  return {
+    kind: "demo", host: "Demo auf diesem Gerät",
+    users: () => db.profiles.slice().sort(byName),
+    switchUser(id) { LS.set("la_demo_user", id); },
+    reset() { db = seed(); save(); LS.set("la_demo_user", "u-admin"); },
+    async session() { const m = meRow(); return m ? { user: { id: m.id, email: email(m) } } : null; },
+    onAuth() {},
+    async signOut() {},
+    async myProfile(id) { await wait(); return clone(db.profiles.find(p => p.id === id) || null); },
+    async profiles() {
+      await wait();
+      const me = uid();
+      return clone(db.profiles.filter(p => p.id === me || staff() || (p.approved && myRole())));
+    },
+    async emails() { return staff() ? db.profiles.map(p => ({ id: p.id, email: email(p) })) : []; },
+    async updateProfile(id, patch) {
+      await wait();
+      const old = db.profiles.find(p => p.id === id); const me = uid(); const my = myRole() || "";
+      if (!old || !(id === me || staff())) deny();
+      const n = Object.assign({}, old, patch);
+      if (my !== "admin") {
+        if (n.role !== old.role) deny("Nur Admins dürfen Rollen ändern");
+        if (old.id !== me && old.role !== "athlete") deny("Nur Admins dürfen Trainer- und Admin-Profile ändern");
+      }
+      if (!["admin", "trainer"].includes(my) && (n.approved !== old.approved || n.plan_group_id !== old.plan_group_id))
+        deny("Freischaltung und Trainingsgruppe dürfen nur Trainer und Admins ändern");
+      if (old.role === "admin" && old.approved && (n.role !== "admin" || !n.approved) && !otherAdmins(old.id))
+        deny("Es muss mindestens einen Admin geben");
+      Object.assign(old, patch); save(); return clone(old);
+    },
+    async deleteUser(id) {
+      await wait();
+      const t = db.profiles.find(p => p.id === id); const my = myRole() || "";
+      if (!t) return;
+      if (id !== uid() && !(my === "admin" || (my === "trainer" && t.role === "athlete" && !t.approved))) deny("Keine Berechtigung, dieses Konto zu löschen");
+      if (t.role === "admin" && t.approved && !otherAdmins(id)) deny("Der letzte Admin kann nicht gelöscht werden");
+      db.profiles = db.profiles.filter(p => p.id !== id); save();
+    },
+    async settings() { return myRole() ? clone(db.settings) : null; },
+    async updateSettings(patch) {
+      if (!staff()) deny();
+      if ("team_name" in patch && patch.team_name !== db.settings.team_name && myRole() !== "admin") deny("Nur Admins dürfen den Teamnamen ändern");
+      Object.assign(db.settings, patch); save(); return clone(db.settings);
+    },
+    async groups() { return myRole() ? clone(db.groups.slice().sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name))) : []; },
+    async insertGroup(row) {
+      if (!staff()) deny();
+      if (db.groups.some(g => g.name === row.name)) deny("Eine Trainingsgruppe mit diesem Namen gibt es schon.");
+      const g = Object.assign({ id: "g" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), sort_order: 0 }, row);
+      db.groups.push(g); save(); return clone(g);
+    },
+    async updateGroup(id, patch) {
+      if (!staff()) deny();
+      if (patch.name && db.groups.some(g => g.name === patch.name && g.id !== id)) deny("Eine Trainingsgruppe mit diesem Namen gibt es schon.");
+      const g = db.groups.find(x => x.id === id); Object.assign(g, patch); save(); return clone(g);
+    },
+    async deleteGroup(id) {
+      if (!staff()) deny();
+      db.groups = db.groups.filter(g => g.id !== id);
+      db.profiles.forEach(p => { if (p.plan_group_id === id) p.plan_group_id = null; }); save();
+    }
+  };
+}
+
+/* ───────────── Zustand ───────────── */
+const S = {
+  be: null, user: null, me: null, profiles: [], emails: {}, groups: [], settings: null,
+  tab: LS.get("la_tab", "start"), authMode: "login", authMsg: null, recovery: false, loadError: null
+};
+const role = () => S.me && S.me.role;
+const isAdmin = () => role() === "admin";
+const isStaff = () => role() === "admin" || role() === "trainer";
+const canEdit = p => p.id === S.me.id || isAdmin() || (role() === "trainer" && p.role === "athlete");
+const groupName = id => (S.groups.find(g => g.id === id) || {}).name;
+const pending = () => S.profiles.filter(p => !p.approved && p.role === "athlete");
+
+function connection() {
+  const c = window.LA_CONFIG || {};
+  if (c.supabaseUrl && c.supabaseKey) return { url: c.supabaseUrl.trim(), key: c.supabaseKey.trim(), source: "config" };
+  const l = LS.get("la_conn", null);
+  return l && l.url && l.key ? { url: l.url, key: l.key, source: "local" } : null;
+}
+
+async function loadAll() {
+  S.loadError = null;
+  S.me = await S.be.myProfile(S.user.id);
+  if (!S.me || !S.me.approved) { S.profiles = []; S.groups = []; S.settings = null; return; }
+  const [profiles, groups, settings] = await Promise.all([S.be.profiles(), S.be.groups(), S.be.settings()]);
+  S.profiles = profiles.sort(byName); S.groups = groups; S.settings = settings;
+  S.emails = {};
+  if (isStaff()) (await S.be.emails()).forEach(r => S.emails[r.id] = r.email);
+}
+async function refresh() {
+  if (S.user) { try { await loadAll(); } catch (e) { S.loadError = deErr(e); } }
+  render();
+}
+
+/* ───────────── Ansichten ───────────── */
+const ICON = {
+  start: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 10.5 12 4l8.5 6.5V20a1 1 0 0 1-1 1H15v-6H9v6H4.5a1 1 0 0 1-1-1z"/></svg>',
+  team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M15.5 4.6a3.5 3.5 0 0 1 0 6.8M17.5 14.6c2 .7 3.4 2.5 4 5.4"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>',
+  chev: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>',
+  up: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 15 6-6 6 6"/></svg>',
+  down: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>',
+  edit: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
+  trash: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>'
+};
+const roleChip = r => `<span class="chip ${r === "athlete" ? "" : r}">${ROLE_LABEL[r] || r}</span>`;
+
+function render() {
+  const app = $("#app");
+  document.body.classList.add("no-nav");
+  if (!S.be) { app.innerHTML = viewSetup(); return; }
+  if (S.recovery) { app.innerHTML = viewNewPassword(); return; }
+  if (!S.user) { app.innerHTML = viewAuth(); return; }
+  if (S.loadError) { app.innerHTML = viewMessage("Laden fehlgeschlagen", esc(S.loadError), `<button class="btn block" data-act="reload">Erneut versuchen</button><button class="btn ghost block" data-act="logout" style="margin-top:8px">Abmelden</button>`); return; }
+  if (!S.me) { app.innerHTML = viewMessage("Kein Zugang", "Für dieses Konto gibt es kein Profil (mehr). Wende dich an den Admin deiner Trainingsgruppe.", `<button class="btn ghost block" data-act="logout">Abmelden</button>`); return; }
+  if (!S.me.approved) {
+    app.innerHTML = demoBar() + viewMessage(`Hallo ${esc(firstName(S.me.display_name))}!`,
+      "Dein Konto ist angelegt und wartet auf Freischaltung durch Trainer oder Admin. Sobald du freigeschaltet bist, geht es hier weiter.",
+      `<button class="btn block" data-act="reload">Erneut prüfen</button><button class="btn ghost block" data-act="logout" style="margin-top:8px">Abmelden</button>`);
+    return;
+  }
+  const y = scrollY, sameTab = render.lastTab === S.tab;
+  document.body.classList.remove("no-nav");
+  const views = { start: viewStart, team: viewTeam, settings: viewSettings };
+  if (!views[S.tab]) S.tab = "start";
+  app.innerHTML = demoBar() + viewTop() + `<main>${views[S.tab]()}</main>` + viewNav();
+  render.lastTab = S.tab;
+  if (sameTab) scrollTo(0, y);
+}
+
+function demoBar() {
+  if (!S.be || S.be.kind !== "demo") return "";
+  const opts = S.be.users().map(u => `<option value="${esc(u.id)}" ${u.id === S.user.id ? "selected" : ""}>${esc(u.display_name)} · ${ROLE_LABEL[u.role]}${u.approved ? "" : " (wartet)"}</option>`).join("");
+  return `<div class="demo-bar"><div class="in"><b>Demo</b><span class="muted">Ansicht als</span>
+    <select data-change="demoUser" aria-label="Demo-Person wählen">${opts}</select>
+    <button class="btn sm ghost" data-act="demoExit">Beenden</button></div></div>`;
+}
+
+function viewTop() {
+  const name = (S.settings && S.settings.team_name) || "Trainingsgruppe";
+  return `<header class="top"><div class="top-in"><img class="logo" src="icon-192.png" alt="">
+    <div class="grow"><h1>${esc(name)}</h1><div class="sub">${esc(S.me.display_name)} · ${ROLE_LABEL[role()]}</div></div></div></header>`;
+}
+
+function viewNav() {
+  const n = isStaff() ? pending().length : 0;
+  const b = (id, label) => `<button data-act="tab" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ""}>${ICON[id]}${label}${id === "team" && n ? `<span class="badge">${n}</span>` : ""}</button>`;
+  return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("team", "Team")}${b("settings", "Einstellungen")}</div></nav>`;
+}
+
+function viewMessage(title, text, actions) {
+  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>${title}</h1></div>
+    <div class="card"><p>${text}</p>${actions}</div></div>`;
+}
+
+function viewSetup() {
+  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>Trainingsgruppe</h1>
+    <p class="muted">Die App ist noch mit keinem Server verbunden.</p></div>
+    <div class="card"><h3>Ausprobieren</h3><p class="muted small">Alles läuft nur auf diesem Gerät, mit Beispielpersonen. Du kannst zwischen Admin-, Trainer- und Athletenansicht wechseln.</p>
+      <button class="btn block" data-act="demoStart">Demo starten</button></div>
+    <div class="card"><h3>Mit Supabase verbinden</h3>
+      <p class="muted small">Werte aus Supabase → Project Settings → API. Dauerhaft für alle trägt man sie in <code>config.js</code> ein; hier gelten sie nur für dieses Gerät.</p>
+      <form data-form="connect">
+        <label class="f"><span>Project URL</span><input type="url" name="url" required placeholder="https://xyz.supabase.co" autocomplete="off"></label>
+        <label class="f"><span>anon / publishable key</span><input type="text" name="key" required autocomplete="off" spellcheck="false"></label>
+        <button class="btn ghost block">Verbinden</button></form></div></div>`;
+}
+
+function viewAuth() {
+  const m = S.authMode, msg = S.authMsg;
+  const note = msg ? `<div class="${msg.ok ? "okmsg" : "err"}">${esc(msg.text)}</div>` : "";
+  let form;
+  if (m === "register") form = `<form data-form="register">
+      <label class="f"><span>Vor- und Nachname</span><input type="text" name="name" required maxlength="60" autocomplete="name"></label>
+      <label class="f"><span>E-Mail</span><input type="email" name="email" required autocomplete="email"></label>
+      <label class="f"><span>Passwort</span><input type="password" name="pw" required minlength="8" autocomplete="new-password"><div class="hint">Mindestens 8 Zeichen.</div></label>
+      <button class="btn block">Konto anlegen</button>
+      <p class="small muted" style="margin-top:12px">Nach der Registrierung schaltet dich ein Trainer oder Admin frei.</p></form>
+      <p style="text-align:center">Schon ein Konto? <button class="linkbtn" data-act="authMode" data-mode="login">Anmelden</button></p>`;
+  else if (m === "forgot") form = `<form data-form="forgot">
+      <p class="small muted">Du bekommst eine E-Mail mit einem Link, über den du ein neues Passwort setzt.</p>
+      <label class="f"><span>E-Mail</span><input type="email" name="email" required autocomplete="email"></label>
+      <button class="btn block">Link senden</button></form>
+      <p style="text-align:center"><button class="linkbtn" data-act="authMode" data-mode="login">Zurück zur Anmeldung</button></p>`;
+  else form = `<form data-form="login">
+      <label class="f"><span>E-Mail</span><input type="email" name="email" required autocomplete="email"></label>
+      <label class="f"><span>Passwort</span><input type="password" name="pw" required autocomplete="current-password"></label>
+      <button class="btn block">Anmelden</button></form>
+      <p style="text-align:center;margin-top:10px"><button class="linkbtn" data-act="authMode" data-mode="forgot">Passwort vergessen?</button></p>
+      <p style="text-align:center">Neu hier? <button class="linkbtn" data-act="authMode" data-mode="register">Konto anlegen</button></p>`;
+  const title = { login: "Anmelden", register: "Registrieren", forgot: "Passwort vergessen" }[m];
+  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>Trainingsgruppe</h1><p class="muted">${title}</p></div>
+    <div class="card">${note}${form}</div>
+    ${S.be.kind === "supabase" && connection()?.source === "local" ? `<p style="text-align:center"><button class="linkbtn small" data-act="disconnect">Verbindung ändern</button></p>` : ""}</div>`;
+}
+
+function viewNewPassword() {
+  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>Neues Passwort</h1></div>
+    <div class="card"><form data-form="newpw">
+      <label class="f"><span>Neues Passwort</span><input type="password" name="pw" required minlength="8" autocomplete="new-password"></label>
+      <label class="f"><span>Wiederholen</span><input type="password" name="pw2" required minlength="8" autocomplete="new-password"></label>
+      <button class="btn block">Speichern</button></form></div></div>`;
+}
+
+function viewStart() {
+  const me = S.me, s = S.settings || {};
+  const gname = groupName(me.plan_group_id);
+  const athletes = S.profiles.filter(p => p.approved && p.role === "athlete");
+  const coaches = S.profiles.filter(p => p.approved && p.role !== "athlete");
+  let planLine;
+  if (isStaff()) planLine = s.plan_visibility === "all" ? "Alle sehen alle Trainingspläne." : "Athleten sehen nur ihren zugeordneten Plan.";
+  else if (gname) planLine = s.plan_visibility === "all" ? `Dein Plan: <b>${esc(gname)}</b>. Die Pläne der anderen kannst du auch sehen.` : `Dein Plan: <b>${esc(gname)}</b>.`;
+  else planLine = "Du bist noch keiner Trainingsgruppe zugeordnet. Das macht dein Trainer.";
+  const n = isStaff() ? pending().length : 0;
+  const perGroup = S.groups.map(g => [g.name, athletes.filter(a => a.plan_group_id === g.id).length]);
+  const none = athletes.filter(a => !groupName(a.plan_group_id)).length;
+  return `
+    ${n ? `<div class="notice"><div class="grow"><b>${n} ${n === 1 ? "Konto wartet" : "Konten warten"} auf Freischaltung</b></div><button class="btn sm" data-act="tab" data-tab="team">Ansehen</button></div>` : ""}
+    <div class="card hero"><h3>Hallo ${esc(firstName(me.display_name))}!</h3>
+      <p>${roleChip(me.role)} ${gname ? `<span class="chip">${esc(gname)}</span>` : ""}</p>
+      <p class="muted" style="margin:0">${planLine}</p></div>
+    <h2>Team</h2>
+    <div class="card"><div class="stats">
+      <div class="stat"><b>${athletes.length}</b><span>Athleten</span></div>
+      <div class="stat"><b>${coaches.length}</b><span>Trainer &amp; Admins</span></div>
+      <div class="stat"><b>${S.groups.length}</b><span>Trainingsgruppen</span></div></div>
+      ${perGroup.length ? `<p class="small muted" style="margin:12px 0 0">${perGroup.map(([g, c]) => `${esc(g)}: ${c}`).join(" · ")}${none ? ` · ohne Gruppe: ${none}` : ""}</p>` : ""}</div>
+    <h2>Kommt als Nächstes</h2>
+    <div class="card"><ul class="soon">
+      <li>Wochenplan aus Excel hochladen und pro Gruppe anzeigen</li>
+      <li>Zu- und Absagen fürs Training, Absagegrund nur für Trainer sichtbar</li>
+      <li>Testwochen mit Verlauf und Abgleich mit Gruppennormen</li>
+      <li>Wettkampfergebnisse und Saisonkalender</li></ul></div>`;
+}
+
+function memberRow(p) {
+  const g = groupName(p.plan_group_id);
+  const meta = [p.role === "athlete" ? (g || "keine Gruppe") : g, isStaff() ? S.emails[p.id] : null].filter(Boolean).map(esc).join(" · ");
+  const flags = (p.role !== "athlete" ? roleChip(p.role) : "") + (!p.approved ? ` <span class="chip off">gesperrt</span>` : "");
+  return `<button class="row" data-act="member" data-id="${esc(p.id)}">
+    <span class="avatar ${p.role}">${esc(initials(p.display_name))}</span>
+    <span class="grow"><span class="name">${esc(p.display_name)}${p.id === S.me.id ? ' <span class="muted">(du)</span>' : ""}</span><span class="meta">${meta || "&nbsp;"}</span></span>
+    ${flags}<span class="chev">${ICON.chev}</span></button>`;
+}
+// Nicht freigeschaltete Athleten stehen für Trainer/Admins oben zur Freischaltung
+const isWaiting = p => !p.approved && p.role === "athlete";
+
+function viewTeam() {
+  const staff = isStaff();
+  const waiting = staff ? S.profiles.filter(isWaiting) : [];
+  const rest = S.profiles.filter(p => !waiting.includes(p));
+  const coaches = rest.filter(p => p.role !== "athlete");
+  const athletes = rest.filter(p => p.role === "athlete");
+  let html = "";
+  if (waiting.length) {
+    html += `<h2>Wartet auf Freischaltung</h2><div class="card flush">` + waiting.map(p => `
+      <div class="row"><span class="avatar">${esc(initials(p.display_name))}</span>
+        <span class="grow"><span class="name">${esc(p.display_name)}</span><span class="meta">${esc(S.emails[p.id] || "")}</span></span>
+        <button class="btn sm ok" data-act="approve" data-id="${esc(p.id)}">Freischalten</button>
+        <button class="iconbtn" data-act="reject" data-id="${esc(p.id)}" aria-label="Ablehnen" title="Ablehnen">${ICON.trash}</button></div>`).join("") + `</div>`;
+  }
+  html += `<h2>Trainer &amp; Admins</h2><div class="card flush">${coaches.map(memberRow).join("") || `<div class="row muted">Niemand</div>`}</div>`;
+  html += `<h2>Athleten</h2><div class="card flush">`;
+  const groups = S.groups.map(g => [g.name, athletes.filter(a => a.plan_group_id === g.id)]);
+  groups.push(["Ohne Trainingsgruppe", athletes.filter(a => !groupName(a.plan_group_id))]);
+  const shown = groups.filter(([, list]) => list.length);
+  html += shown.map(([name, list]) => `<div class="subhead">${esc(name)} · ${list.length}</div>${list.map(memberRow).join("")}`).join("") || `<div class="row muted">Noch keine Athleten</div>`;
+  html += `</div>`;
+  if (staff) html += `<p class="small muted" style="margin:8px 4px">Neue Mitglieder registrieren sich selbst in der App und erscheinen dann oben zur Freischaltung. Link zum Teilen: <a href="${esc(appUrl())}">${esc(appUrl())}</a></p>`;
+  return html;
+}
+
+function viewSettings() {
+  const s = S.settings || {};
+  const seg = (k, opts) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button data-act="pref" data-k="${k}" data-v="${v}" aria-pressed="${prefs[k] === v}">${l}</button>`).join("")}</div>`;
+  let html = `<h2>Darstellung</h2><div class="card">
+      <label class="f"><span>Design</span>${seg("theme", [["system", "Automatisch"], ["light", "Hell"], ["dark", "Dunkel"]])}</label>
+      <label class="f" style="margin:0"><span>Schriftgröße</span>${seg("textSize", [["normal", "Normal"], ["large", "Groß"]])}</label>
+      <div class="hint">Gilt nur auf diesem Gerät.</div></div>
+
+    <h2>Mein Konto</h2><div class="card">
+      <form data-form="myname"><label class="f"><span>Name</span><input type="text" name="name" required maxlength="60" value="${esc(S.me.display_name)}"></label>
+      <label class="f"><span>E-Mail</span><input type="email" value="${esc(S.user.email || "")}" readonly></label>
+      <button class="btn sm ghost">Name speichern</button></form>
+      <div class="btns"><button class="btn ghost" data-act="changePw" ${S.be.kind === "demo" ? "disabled" : ""}>Passwort ändern</button>
+      <button class="btn ghost" data-act="logout">Abmelden</button></div></div>`;
+
+  if (isStaff()) {
+    html += `<h2>Trainingspläne</h2><div class="card">
+      <h3>Wer sieht welchen Plan?</h3>
+      <label class="opt"><input type="radio" name="vis" value="all" data-change="visibility" ${s.plan_visibility === "all" ? "checked" : ""}>
+        <span><b>Alle sehen alle Pläne</b><span class="small muted">Jeder sieht seinen Plan zuerst, kann aber auch die anderen öffnen.</span></span></label>
+      <label class="opt"><input type="radio" name="vis" value="assigned" data-change="visibility" ${s.plan_visibility === "assigned" ? "checked" : ""}>
+        <span><b>Nur den eigenen Plan</b><span class="small muted">Athleten sehen nur die Trainingsgruppe, der sie zugeordnet sind.</span></span></label>
+      <div class="hint">Trainer und Admins sehen immer alle Pläne.</div></div>
+      <div class="card flush"><div class="subhead">Trainingsgruppen (= Blätter im Excel-Plan)</div>
+      ${S.groups.map((g, i) => `<div class="setrow"><span class="grow"><b>${esc(g.name)}</b>
+          <span class="small muted" style="display:block">${S.profiles.filter(p => p.plan_group_id === g.id).length} Personen</span></span>
+        <button class="iconbtn" data-act="groupMove" data-id="${esc(g.id)}" data-dir="-1" ${i === 0 ? "disabled" : ""} aria-label="Nach oben">${ICON.up}</button>
+        <button class="iconbtn" data-act="groupMove" data-id="${esc(g.id)}" data-dir="1" ${i === S.groups.length - 1 ? "disabled" : ""} aria-label="Nach unten">${ICON.down}</button>
+        <button class="iconbtn" data-act="groupRename" data-id="${esc(g.id)}" aria-label="Umbenennen">${ICON.edit}</button>
+        <button class="iconbtn" data-act="groupDelete" data-id="${esc(g.id)}" aria-label="Löschen">${ICON.trash}</button></div>`).join("")}
+      <div class="setrow"><button class="btn sm ghost" data-act="groupAdd">+ Trainingsgruppe hinzufügen</button></div></div>`;
+  }
+
+  if (isAdmin()) {
+    html += `<h2>Admin</h2><div class="card">
+      <form data-form="teamname"><label class="f"><span>Name der Trainingsgruppe</span><input type="text" name="name" required maxlength="60" value="${esc(s.team_name || "")}"></label>
+      <button class="btn sm ghost">Speichern</button></form></div>
+      <div class="card"><h3>Backup</h3>
+      <p class="small muted">Sichert Einstellungen, Trainingsgruppen, Rollen und Zuordnungen als Datei. Beim Wiederherstellen werden diese Werte zurückgeschrieben; Konten selbst werden dabei weder angelegt noch gelöscht.</p>
+      <div class="btns"><button class="btn" data-act="backup">Backup herunterladen</button>
+      <button class="btn ghost" data-act="restore">Wiederherstellen …</button></div>
+      <input type="file" id="restore-file" accept="application/json,.json" hidden data-change="restoreFile"></div>`;
+  }
+
+  html += `<h2>Daten &amp; App</h2><div class="card flush">
+    <div class="setrow"><span class="grow">Meine Daten<div class="small muted">Alles, was über dich gespeichert ist, als Datei</div></span><button class="btn sm ghost" data-act="exportMine">Exportieren</button></div>
+    <div class="setrow"><span class="grow">Version<div class="small muted">${esc(VERSION)}</div></span><button class="btn sm ghost" data-act="update">Aktualisieren</button></div>
+    <div class="setrow"><span class="grow">Verbunden mit<div class="small muted">${esc(S.be.host)}</div></span>
+      ${S.be.kind === "demo" ? `<button class="btn sm ghost" data-act="demoReset">Demo zurücksetzen</button>` : connection()?.source === "local" ? `<button class="btn sm ghost" data-act="disconnect">Trennen</button>` : ""}</div>
+    <div class="setrow"><span class="grow">Konto löschen<div class="small muted">Entfernt dein Konto und alle deine Daten</div></span><button class="btn sm danger" data-act="deleteMe">Löschen</button></div>
+  </div>`;
+  return html;
+}
+
+/* ───────────── Dialoge ───────────── */
+const dlg = $("#dlg");
+function sheet(html) { $("#dlg-body").innerHTML = html; if (!dlg.open) dlg.showModal(); }
+function closeSheet() { if (dlg.open) dlg.close(); }
+dlg.addEventListener("click", e => { if (e.target === dlg) closeSheet(); });
+function ask(title, text, okLabel = "OK", danger = false) {
+  return new Promise(res => {
+    sheet(`<h3>${esc(title)}</h3><p>${text}</p><div class="btns">
+      <button class="btn ghost" data-r="0">Abbrechen</button><button class="btn ${danger ? "danger" : ""}" data-r="1">${esc(okLabel)}</button></div>`);
+    const done = v => { dlg.removeEventListener("close", onClose); closeSheet(); res(v); };
+    const onClose = () => res(false);
+    dlg.addEventListener("close", onClose, { once: true });
+    $("#dlg-body").querySelectorAll("[data-r]").forEach(b => b.onclick = () => done(b.dataset.r === "1"));
+  });
+}
+function askText(title, label, value = "") {
+  return new Promise(res => {
+    sheet(`<h3>${esc(title)}</h3><form id="ask-f"><label class="f"><span>${esc(label)}</span><input type="text" name="v" required maxlength="60" value="${esc(value)}"></label>
+      <div class="btns"><button type="button" class="btn ghost" data-r="0">Abbrechen</button><button class="btn">Speichern</button></div></form>`);
+    const f = $("#ask-f"); let settled = false;
+    const done = v => { settled = true; closeSheet(); res(v); };
+    dlg.addEventListener("close", () => { if (!settled) res(null); }, { once: true });
+    f.querySelector("[data-r]").onclick = () => done(null);
+    f.onsubmit = e => { e.preventDefault(); done(f.v.value.trim()); };
+    setTimeout(() => f.v.focus(), 50);
+  });
+}
+
+function memberSheet(id) {
+  const p = S.profiles.find(x => x.id === id); if (!p) return;
+  const edit = canEdit(p), self = p.id === S.me.id;
+  const staffEdit = isStaff() && edit;
+  const canDelete = !self && (isAdmin() || (role() === "trainer" && p.role === "athlete" && !p.approved));
+  const groupOpts = `<option value="">– keine –</option>` + S.groups.map(g => `<option value="${esc(g.id)}" ${g.id === p.plan_group_id ? "selected" : ""}>${esc(g.name)}</option>`).join("");
+  const info = `<p class="muted small">${roleChip(p.role)} ${S.emails[p.id] ? esc(S.emails[p.id]) : ""}</p>`;
+  if (!edit && !staffEdit) {
+    sheet(`<h3>${esc(p.display_name)}</h3>${info}<p>Trainingsgruppe: <b>${esc(groupName(p.plan_group_id) || "keine")}</b></p>
+      <div class="btns"><button class="btn ghost" data-act="closeSheet">Schließen</button></div>`);
+    return;
+  }
+  sheet(`<h3>${esc(p.display_name)}</h3>${info}
+    <form data-form="member" data-id="${esc(p.id)}">
+      <label class="f"><span>Name</span><input type="text" name="name" required maxlength="60" value="${esc(p.display_name)}"></label>
+      ${staffEdit ? `<label class="f"><span>Trainingsgruppe</span><select name="group">${groupOpts}</select></label>` : ""}
+      ${isAdmin() ? `<label class="f"><span>Rolle</span><select name="role">${["athlete", "trainer", "admin"].map(r => `<option value="${r}" ${r === p.role ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select>
+        <div class="hint">Trainer: Freischalten, Gruppen zuordnen, Pläne verwalten. Admin: zusätzlich Rollen, Teamname, Backup.</div></label>` : ""}
+      ${staffEdit && !self ? `<label class="opt"><input type="checkbox" name="approved" ${p.approved ? "checked" : ""}><span><b>Zugang aktiv</b><span class="small muted">Ohne Haken kann sich die Person zwar anmelden, sieht aber nichts.</span></span></label>` : ""}
+      <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div>
+    </form>
+    ${canDelete ? `<div class="btns"><button class="btn danger block" data-act="deleteMember" data-id="${esc(p.id)}">Konto löschen</button></div>` : ""}`);
+}
+
+/* ───────────── Aktionen ───────────── */
+async function busy(el, fn) {
+  const btns = el ? el.querySelectorAll("button") : [];
+  btns.forEach(b => b.disabled = true);
+  try { return await fn(); }
+  catch (e) { toast(deErr(e), "error"); throw e; }
+  finally { btns.forEach(b => b.disabled = false); }
+}
+const quiet = p => p.catch(() => {});
+
+const actions = {
+  tab(el) { S.tab = el.dataset.tab; LS.set("la_tab", S.tab); render(); scrollTo(0, 0); },
+  authMode(el) { S.authMode = el.dataset.mode; S.authMsg = null; render(); },
+  pref(el) { setPref(el.dataset.k, el.dataset.v); },
+  reload() { refresh(); },
+  closeSheet() { closeSheet(); },
+  member(el) { memberSheet(el.dataset.id); },
+  async logout() {
+    if (S.be.kind === "demo") return actions.demoExit();
+    await S.be.signOut(); S.user = null; S.me = null; S.authMode = "login"; S.authMsg = null; render();
+  },
+  async approve(el) {
+    await quiet(busy(el.parentElement, async () => {
+      await S.be.updateProfile(el.dataset.id, { approved: true });
+      const p = S.profiles.find(x => x.id === el.dataset.id);
+      toast(`${p ? p.display_name : "Konto"} ist freigeschaltet`);
+      await refresh();
+      if (S.groups.length) memberSheet(el.dataset.id);
+    }));
+  },
+  async reject(el) {
+    const p = S.profiles.find(x => x.id === el.dataset.id);
+    if (!await ask("Registrierung ablehnen?", `Das Konto von <b>${esc(p.display_name)}</b> wird gelöscht.`, "Ablehnen", true)) return;
+    await quiet(busy(null, async () => { await S.be.deleteUser(p.id); toast("Abgelehnt"); await refresh(); }));
+  },
+  async deleteMember(el) {
+    const p = S.profiles.find(x => x.id === el.dataset.id);
+    if (!await ask("Konto löschen?", `Das Konto von <b>${esc(p.display_name)}</b> und alle zugehörigen Daten werden endgültig gelöscht.`, "Endgültig löschen", true)) return;
+    await quiet(busy(null, async () => { await S.be.deleteUser(p.id); toast("Konto gelöscht"); await refresh(); }));
+  },
+  async deleteMe() {
+    if (!await ask("Eigenes Konto löschen?", "Dein Konto und alle deine Daten werden endgültig gelöscht. Das lässt sich nicht rückgängig machen.", "Endgültig löschen", true)) return;
+    await quiet(busy(null, async () => {
+      await S.be.deleteUser(S.me.id);
+      if (S.be.kind === "demo") { S.be.switchUser("u-admin"); return boot(); }
+      await S.be.signOut(); S.user = null; S.me = null; render(); toast("Konto gelöscht");
+    }));
+  },
+  changePw() {
+    sheet(`<h3>Passwort ändern</h3><form data-form="changepw">
+      <label class="f"><span>Neues Passwort</span><input type="password" name="pw" required minlength="8" autocomplete="new-password"></label>
+      <label class="f"><span>Wiederholen</span><input type="password" name="pw2" required minlength="8" autocomplete="new-password"></label>
+      <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>`);
+  },
+  async groupAdd() {
+    const name = await askText("Neue Trainingsgruppe", "Name (wie das Blatt im Excel-Plan)"); if (!name) return;
+    const max = Math.max(0, ...S.groups.map(g => g.sort_order || 0));
+    await quiet(busy(null, async () => { await S.be.insertGroup({ name, sort_order: max + 1 }); await refresh(); toast("Hinzugefügt"); }));
+  },
+  async groupRename(el) {
+    const g = S.groups.find(x => x.id === el.dataset.id);
+    const name = await askText("Umbenennen", "Name", g.name); if (!name || name === g.name) return;
+    await quiet(busy(null, async () => { await S.be.updateGroup(g.id, { name }); await refresh(); }));
+  },
+  async groupMove(el) {
+    const i = S.groups.findIndex(x => x.id === el.dataset.id), j = i + Number(el.dataset.dir);
+    if (j < 0 || j >= S.groups.length) return;
+    const list = S.groups.slice(); [list[i], list[j]] = [list[j], list[i]];
+    await quiet(busy(el.closest(".card"), async () => {
+      await Promise.all(list.map((g, k) => g.sort_order === k + 1 ? null : S.be.updateGroup(g.id, { sort_order: k + 1 })));
+      await refresh();
+    }));
+  },
+  async groupDelete(el) {
+    const g = S.groups.find(x => x.id === el.dataset.id);
+    const n = S.profiles.filter(p => p.plan_group_id === g.id).length;
+    if (!await ask("Trainingsgruppe löschen?", `<b>${esc(g.name)}</b> wird gelöscht.${n ? ` ${n} Person(en) sind danach keiner Gruppe mehr zugeordnet.` : ""}`, "Löschen", true)) return;
+    await quiet(busy(null, async () => { await S.be.deleteGroup(g.id); await refresh(); toast("Gelöscht"); }));
+  },
+  async backup() {
+    await quiet(busy(null, async () => {
+      await loadAll();
+      download(`trainingsgruppe-backup_${stamp()}.json`, {
+        app: APP_ID, format: 1, created_at: new Date().toISOString(), created_by: S.me.display_name, app_version: VERSION,
+        settings: { team_name: S.settings.team_name, plan_visibility: S.settings.plan_visibility },
+        plan_groups: S.groups.map(g => ({ id: g.id, name: g.name, sort_order: g.sort_order })),
+        profiles: S.profiles.map(p => ({ id: p.id, display_name: p.display_name, email: S.emails[p.id] || null, role: p.role, approved: p.approved, plan_group_id: p.plan_group_id }))
+      });
+      LS.set("la_last_backup", new Date().toISOString());
+      toast("Backup gespeichert");
+    }));
+  },
+  restore() { $("#restore-file").click(); },
+  exportMine() {
+    download(`meine-daten_${stamp()}.json`, {
+      app: APP_ID, exported_at: new Date().toISOString(), email: S.user.email || null,
+      profile: { display_name: S.me.display_name, role: S.me.role, approved: S.me.approved, trainingsgruppe: groupName(S.me.plan_group_id) || null, created_at: S.me.created_at },
+      geraete_einstellungen: prefs
+    });
+  },
+  async update() {
+    toast("Suche nach neuer Version …");
+    try { const r = await navigator.serviceWorker?.getRegistration(); await r?.update(); } catch {}
+    setTimeout(() => location.reload(), 600);
+  },
+  demoStart() { LS.set("la_mode", "demo"); boot(); },
+  demoExit() { LS.del("la_mode"); S.be = null; S.user = null; S.me = null; boot(); },
+  async demoReset() {
+    if (!await ask("Demo zurücksetzen?", "Alle Änderungen im Demo-Modus gehen verloren.", "Zurücksetzen", true)) return;
+    S.be.reset(); boot();
+  },
+  async disconnect() {
+    if (!await ask("Verbindung trennen?", "Die Server-Daten bleiben erhalten; nur dieses Gerät vergisst die Verbindung.", "Trennen", true)) return;
+    try { await S.be.signOut(); } catch {}
+    LS.del("la_conn"); S.be = null; S.user = null; S.me = null; boot();
+  }
+};
+
+const changes = {
+  pref() {},
+  async demoUser(el) { S.be.switchUser(el.value); closeSheet(); await boot(); },
+  async visibility(el) {
+    await quiet(busy(null, async () => {
+      S.settings = await S.be.updateSettings({ plan_visibility: el.value });
+      toast(el.value === "all" ? "Alle sehen jetzt alle Pläne" : "Athleten sehen jetzt nur ihren Plan");
+      render();
+    }));
+  },
+  async restoreFile(el) {
+    const file = el.files[0]; el.value = ""; if (!file) return;
+    let data;
+    try { data = JSON.parse(await file.text()); } catch { return toast("Die Datei ist kein gültiges Backup.", "error"); }
+    if (!data || data.app !== APP_ID || data.format !== 1) return toast("Die Datei ist kein Backup dieser App.", "error");
+    const when = data.created_at ? new Date(data.created_at).toLocaleString("de-DE") : "unbekannt";
+    if (!await ask("Backup wiederherstellen?", `Backup vom <b>${esc(when)}</b>: ${data.plan_groups.length} Trainingsgruppen, ${data.profiles.length} Personen. Aktuelle Einstellungen, Gruppen, Rollen und Zuordnungen werden damit überschrieben.`, "Wiederherstellen", true)) return;
+    await quiet(busy(null, () => restoreBackup(data)));
+  }
+};
+
+async function restoreBackup(data) {
+  await loadAll();
+  const r = { groups: 0, people: 0, skipped: 0 };
+  await S.be.updateSettings({ team_name: data.settings.team_name, plan_visibility: data.settings.plan_visibility });
+  const idMap = {};
+  for (const g of data.plan_groups) {
+    const byId = S.groups.find(x => x.id === g.id), byName = S.groups.find(x => x.name === g.name);
+    if (byId) { await S.be.updateGroup(byId.id, { name: g.name, sort_order: g.sort_order }); idMap[g.id] = byId.id; }
+    else if (byName) { await S.be.updateGroup(byName.id, { sort_order: g.sort_order }); idMap[g.id] = byName.id; }
+    else { const n = await S.be.insertGroup({ id: g.id, name: g.name, sort_order: g.sort_order }); idMap[g.id] = n.id; }
+    r.groups++;
+  }
+  // Admins zuerst, damit nie der letzte Admin herabgestuft wird
+  const rows = data.profiles.slice().sort((a, b) => (b.role === "admin") - (a.role === "admin"));
+  for (const p of rows) {
+    const cur = S.profiles.find(x => x.id === p.id);
+    if (!cur) { r.skipped++; continue; }
+    const patch = { display_name: p.display_name, plan_group_id: p.plan_group_id ? (idMap[p.plan_group_id] || null) : null };
+    if (p.id !== S.me.id) { patch.role = p.role; patch.approved = p.approved; }
+    try { await S.be.updateProfile(p.id, patch); r.people++; } catch (e) { r.skipped++; }
+  }
+  await refresh();
+  toast(`Wiederhergestellt: ${r.groups} Gruppen, ${r.people} Personen${r.skipped ? `, ${r.skipped} übersprungen (Konto existiert nicht mehr)` : ""}`);
+}
+
+const forms = {
+  async connect(f) {
+    const url = f.url.value.trim().replace(/\/+$/, ""), key = f.key.value.trim();
+    if (!/^https:\/\/.+/.test(url)) return toast("Die URL muss mit https:// beginnen.", "error");
+    LS.set("la_conn", { url, key }); boot();
+  },
+  async login(f) {
+    S.authMsg = null;
+    try {
+      const s = await S.be.signIn(f.email.value.trim(), f.pw.value);
+      S.user = s.user; await refresh();
+    } catch (e) { S.authMsg = { text: deErr(e) }; render(); }
+  },
+  async register(f) {
+    S.authMsg = null;
+    try {
+      const s = await S.be.signUp(f.email.value.trim(), f.pw.value, f.name.value.trim());
+      if (s) { S.user = s.user; await refresh(); }
+      else { S.authMode = "login"; S.authMsg = { ok: true, text: "Fast geschafft: Bestätige deine E-Mail-Adresse über den Link in der Mail und melde dich dann an." }; render(); }
+    } catch (e) { S.authMsg = { text: deErr(e) }; render(); }
+  },
+  async forgot(f) {
+    try { await S.be.resetPassword(f.email.value.trim()); S.authMode = "login"; S.authMsg = { ok: true, text: "Wenn es ein Konto mit dieser E-Mail gibt, ist ein Link unterwegs." }; }
+    catch (e) { S.authMsg = { text: deErr(e) }; }
+    render();
+  },
+  async newpw(f) {
+    if (f.pw.value !== f.pw2.value) return toast("Die Passwörter stimmen nicht überein.", "error");
+    await S.be.setPassword(f.pw.value);
+    S.recovery = false; history.replaceState(null, "", appUrl()); toast("Passwort gespeichert"); await refresh();
+  },
+  async changepw(f) {
+    if (f.pw.value !== f.pw2.value) return toast("Die Passwörter stimmen nicht überein.", "error");
+    await S.be.setPassword(f.pw.value); closeSheet(); toast("Passwort geändert");
+  },
+  async myname(f) {
+    await S.be.updateProfile(S.me.id, { display_name: f.name.value.trim() }); await refresh(); toast("Name gespeichert");
+  },
+  async teamname(f) {
+    S.settings = await S.be.updateSettings({ team_name: f.name.value.trim() }); render(); toast("Gespeichert");
+  },
+  async member(f) {
+    const id = f.dataset.id, p = S.profiles.find(x => x.id === id), patch = {};
+    const name = f.name.value.trim(); if (name !== p.display_name) patch.display_name = name;
+    if (f.group) { const g = f.group.value || null; if (g !== p.plan_group_id) patch.plan_group_id = g; }
+    if (f.role && f.role.value !== p.role) {
+      if (id === S.me.id && f.role.value !== "admin" && !await ask("Eigene Admin-Rechte abgeben?", "Du kannst sie dir danach nicht selbst zurückgeben.", "Abgeben", true)) return;
+      patch.role = f.role.value;
+    }
+    if (f.approved && f.approved.checked !== p.approved) patch.approved = f.approved.checked;
+    if (Object.keys(patch).length) { await S.be.updateProfile(id, patch); await refresh(); toast("Gespeichert"); }
+    closeSheet();
+  }
+};
+
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-act]");
+  if (el && actions[el.dataset.act] && !el.disabled) { e.preventDefault(); actions[el.dataset.act](el); }
+});
+document.addEventListener("change", e => {
+  const el = e.target.closest("[data-change]");
+  if (el && changes[el.dataset.change]) changes[el.dataset.change](el);
+});
+document.addEventListener("submit", e => {
+  const f = e.target.closest("form[data-form]");
+  if (!f || !forms[f.dataset.form]) return;
+  e.preventDefault();
+  quiet(busy(f, () => forms[f.dataset.form](f)));
+});
+
+/* ───────────── Start ───────────── */
+async function boot() {
+  applyPrefs();
+  closeSheet();
+  S.be = null; S.user = null; S.me = null; S.loadError = null;
+  const conn = connection();
+  if (LS.get("la_mode", null) === "demo") S.be = makeDemoBackend();
+  else if (conn) {
+    if (!window.supabase) { $("#app").innerHTML = viewMessage("Fehler", "Die Supabase-Bibliothek konnte nicht geladen werden.", `<button class="btn block" data-act="update">Neu laden</button>`); return; }
+    try { S.be = makeSupabaseBackend(conn.url, conn.key); }
+    catch (e) { LS.del("la_conn"); toast(deErr(e), "error"); render(); return; }
+    S.be.onAuth(async (ev, session) => {
+      if (ev === "PASSWORD_RECOVERY") { S.recovery = true; S.user = session?.user || S.user; render(); }
+      else if (ev === "SIGNED_OUT") { S.user = null; S.me = null; render(); }
+      else if (ev === "SIGNED_IN" && session && session.user.id !== S.user?.id) { S.user = session.user; await refresh(); }
+    });
+  }
+  if (!S.be) { render(); return; }
+  try { S.user = (await S.be.session())?.user || null; }
+  catch (e) { S.user = null; S.authMsg = { text: deErr(e) }; }
+  if (/type=recovery/.test(location.hash)) S.recovery = true;
+  await refresh();
+}
+
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+boot();
+</script>
+</body>
+</html>
