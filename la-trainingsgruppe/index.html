@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Trainingsgruppe</title>
-<meta name="theme-color" content="#F4F2EE">
+<title>LT DSHS Köln</title>
+<meta name="theme-color" content="#F4F4F3">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Training">
+<meta name="apple-mobile-web-app-title" content="LT DSHS">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -19,10 +19,10 @@
 <script src="vendor/supabase-2.118.0.js"></script>
 <style>
 :root{
-  --bg:#F4F2EE; --surface:#FFFFFF; --surface-2:#EEEAE3; --line:#DDD7CD; --fg:#1C1A17; --muted:#6A635A;
-  --accent:#B83A1F; --on-accent:#FFFFFF; --accent-soft:#F6E2DA;
-  --ok:#1F7A4D; --ok-soft:#DDEFE4; --warn:#8F6200; --warn-soft:#F7ECCF; --danger:#B3261E; --danger-soft:#F8E0DE;
-  --field:#2E7848;
+  --bg:#F4F4F3; --surface:#FFFFFF; --surface-2:#ECECEA; --line:#D9D9D6; --fg:#111111; --muted:#5E5E5B;
+  --accent:#111111; --on-accent:#FFFFFF; --accent-soft:#E4E4E2;
+  --ok:#1F6E45; --ok-soft:#E1EFE7; --danger:#B3261E; --danger-soft:#F8E0DE;
+  --field:#6B6B68;
   --display:"Barlow Condensed","Arial Narrow",sans-serif;
   --body:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --r:14px; --nav-h:64px;
@@ -30,17 +30,17 @@
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --bg:#121110; --surface:#1C1A18; --surface-2:#262320; --line:#38332E; --fg:#EFEBE5; --muted:#A79F95;
-    --accent:#F2835F; --on-accent:#2B0C03; --accent-soft:#3D231A;
-    --ok:#5FCB92; --ok-soft:#15301F; --warn:#E8B84E; --warn-soft:#3A2E12; --danger:#FF8A80; --danger-soft:#3E1B19;
-    --field:#4FA86E; color-scheme:dark;
+    --bg:#0A0A0A; --surface:#161616; --surface-2:#222222; --line:#333333; --fg:#F2F2F2; --muted:#A3A3A3;
+    --accent:#FFFFFF; --on-accent:#0A0A0A; --accent-soft:#2A2A2A;
+    --ok:#6FCF97; --ok-soft:#163222; --danger:#FF8A80; --danger-soft:#3E1B19;
+    --field:#8C8C8C; color-scheme:dark;
   }
 }
 :root[data-theme="dark"]{
-  --bg:#121110; --surface:#1C1A18; --surface-2:#262320; --line:#38332E; --fg:#EFEBE5; --muted:#A79F95;
-  --accent:#F2835F; --on-accent:#2B0C03; --accent-soft:#3D231A;
-  --ok:#5FCB92; --ok-soft:#15301F; --warn:#E8B84E; --warn-soft:#3A2E12; --danger:#FF8A80; --danger-soft:#3E1B19;
-  --field:#4FA86E; color-scheme:dark;
+  --bg:#0A0A0A; --surface:#161616; --surface-2:#222222; --line:#333333; --fg:#F2F2F2; --muted:#A3A3A3;
+    --accent:#FFFFFF; --on-accent:#0A0A0A; --accent-soft:#2A2A2A;
+    --ok:#6FCF97; --ok-soft:#163222; --danger:#FF8A80; --danger-soft:#3E1B19;
+    --field:#8C8C8C; color-scheme:dark;
 }
 html{font-size:16px} html[data-text="large"]{font-size:18.5px}
 *{box-sizing:border-box}
@@ -97,16 +97,14 @@ button.row:hover{background:var(--surface-2)}
 
 .chip{display:inline-flex;align-items:center;gap:4px;font-size:.72rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
   padding:3px 8px;border-radius:999px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
-.chip.admin{background:var(--accent-soft);color:var(--accent)}
-.chip.trainer{background:var(--ok-soft);color:var(--ok)}
-.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.admin{background:var(--accent);color:var(--on-accent)}
+.chip.trainer{background:transparent;color:var(--fg);box-shadow:inset 0 0 0 1.5px var(--fg)}
 .chip.off{background:var(--danger-soft);color:var(--danger)}
 
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:12px;
   background:var(--accent);color:var(--on-accent);font-weight:600}
 .btn.ghost{background:var(--surface-2);color:var(--fg)}
 .btn.danger{background:var(--danger-soft);color:var(--danger)}
-.btn.ok{background:var(--ok);color:#fff}
 .btn.sm{min-height:36px;padding:0 12px;font-size:.85rem;border-radius:10px}
 .btn.block{width:100%}
 .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
@@ -136,7 +134,7 @@ input[readonly]{background:var(--surface-2);color:var(--muted)}
 .setrow:first-child{border-top:0}
 .setrow .grow{flex:1;min-width:0}
 
-.notice{display:flex;gap:12px;align-items:center;padding:14px 16px;border-radius:var(--r);background:var(--warn-soft);color:var(--fg);margin-bottom:12px}
+.notice{display:flex;gap:12px;align-items:center;padding:14px 16px;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--fg);color:var(--fg);margin-bottom:12px}
 .notice .grow{flex:1}
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .stat{background:var(--surface-2);border-radius:12px;padding:10px 12px}
@@ -163,7 +161,7 @@ nav.tabs svg{width:24px;height:24px}
 .err{background:var(--danger-soft);color:var(--danger);border-radius:10px;padding:10px 12px;font-size:.88rem;margin-bottom:12px}
 .okmsg{background:var(--ok-soft);color:var(--ok);border-radius:10px;padding:10px 12px;font-size:.88rem;margin-bottom:12px}
 
-.demo-bar{background:var(--warn-soft);border-bottom:1px solid var(--line);padding:8px 16px;font-size:.85rem}
+.demo-bar{background:var(--surface-2);border-bottom:1px solid var(--line);padding:8px 16px;font-size:.85rem}
 .demo-bar .in{max-width:680px;margin:0 auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .demo-bar select{min-height:34px;padding:4px 8px;width:auto;flex:1;min-width:150px}
 
@@ -190,7 +188,7 @@ dialog h3{font:700 1.4rem/1.1 var(--display);text-transform:uppercase;letter-spa
 
 <script>
 "use strict";
-const VERSION = "17.11.2026 · 1";
+const VERSION = "17.11.2026 · 2";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -251,7 +249,7 @@ function applyPrefs() {
   if (prefs.theme === "system") r.removeAttribute("data-theme"); else r.setAttribute("data-theme", prefs.theme);
   r.dataset.text = prefs.textSize;
   const dark = prefs.theme === "dark" || (prefs.theme === "system" && darkMq.matches);
-  document.querySelector('meta[name="theme-color"]').content = dark ? "#121110" : "#F4F2EE";
+  document.querySelector('meta[name="theme-color"]').content = dark ? "#0A0A0A" : "#F4F4F3";
 }
 darkMq.addEventListener?.("change", applyPrefs);
 function setPref(k, v) { prefs[k] = v; LS.set("la_prefs", prefs); applyPrefs(); render(); }
@@ -297,7 +295,7 @@ function makeDemoBackend() {
     const g = (id, name, s) => ({ id, name, sort_order: s });
     const p = (id, display_name, role, approved, plan_group_id) => ({ id, display_name, role, approved, plan_group_id, created_at: new Date().toISOString() });
     return {
-      settings: { id: 1, team_name: "Demo-Trainingsgruppe", plan_visibility: "all" },
+      settings: { id: 1, team_name: "LT DSHS Köln (Demo)", plan_visibility: "all" },
       groups: [g("g1", "Kurzsprint", 1), g("g2", "Langsprint", 2), g("g3", "Stab", 3), g("g4", "Alternativplan", 4)],
       profiles: [
         p("u-admin", "Alex Admin", "admin", true, "g1"), p("u-trainer", "Toni Trainer", "trainer", true, null),
@@ -460,7 +458,7 @@ function demoBar() {
 }
 
 function viewTop() {
-  const name = (S.settings && S.settings.team_name) || "Trainingsgruppe";
+  const name = (S.settings && S.settings.team_name) || "LT DSHS Köln";
   return `<header class="top"><div class="top-in"><img class="logo" src="icon-192.png" alt="">
     <div class="grow"><h1>${esc(name)}</h1><div class="sub">${esc(S.me.display_name)} · ${ROLE_LABEL[role()]}</div></div></div></header>`;
 }
@@ -477,7 +475,7 @@ function viewMessage(title, text, actions) {
 }
 
 function viewSetup() {
-  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>Trainingsgruppe</h1>
+  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>LT DSHS Köln</h1>
     <p class="muted">Die App ist noch mit keinem Server verbunden.</p></div>
     <div class="card"><h3>Ausprobieren</h3><p class="muted small">Alles läuft nur auf diesem Gerät, mit Beispielpersonen. Du kannst zwischen Admin-, Trainer- und Athletenansicht wechseln.</p>
       <button class="btn block" data-act="demoStart">Demo starten</button></div>
@@ -512,7 +510,7 @@ function viewAuth() {
       <p style="text-align:center;margin-top:10px"><button class="linkbtn" data-act="authMode" data-mode="forgot">Passwort vergessen?</button></p>
       <p style="text-align:center">Neu hier? <button class="linkbtn" data-act="authMode" data-mode="register">Konto anlegen</button></p>`;
   const title = { login: "Anmelden", register: "Registrieren", forgot: "Passwort vergessen" }[m];
-  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>Trainingsgruppe</h1><p class="muted">${title}</p></div>
+  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>LT DSHS Köln</h1><p class="muted">${title}</p></div>
     <div class="card">${note}${form}</div>
     ${S.be.kind === "supabase" && connection()?.source === "local" ? `<p style="text-align:center"><button class="linkbtn small" data-act="disconnect">Verbindung ändern</button></p>` : ""}</div>`;
 }
@@ -579,7 +577,7 @@ function viewTeam() {
     html += `<h2>Wartet auf Freischaltung</h2><div class="card flush">` + waiting.map(p => `
       <div class="row"><span class="avatar">${esc(initials(p.display_name))}</span>
         <span class="grow"><span class="name">${esc(p.display_name)}</span><span class="meta">${esc(S.emails[p.id] || "")}</span></span>
-        <button class="btn sm ok" data-act="approve" data-id="${esc(p.id)}">Freischalten</button>
+        <button class="btn sm" data-act="approve" data-id="${esc(p.id)}">Freischalten</button>
         <button class="iconbtn" data-act="reject" data-id="${esc(p.id)}" aria-label="Ablehnen" title="Ablehnen">${ICON.trash}</button></div>`).join("") + `</div>`;
   }
   html += `<h2>Trainer &amp; Admins</h2><div class="card flush">${coaches.map(memberRow).join("") || `<div class="row muted">Niemand</div>`}</div>`;

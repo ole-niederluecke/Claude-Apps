@@ -14,7 +14,7 @@
 
 create table if not exists public.team_settings (
   id              int primary key default 1 check (id = 1),
-  team_name       text not null default 'Trainingsgruppe',
+  team_name       text not null default 'LT DSHS Köln',
   -- 'all': alle sehen alle Pläne · 'assigned': jeder sieht nur seinen zugeordneten Plan
   plan_visibility text not null default 'all' check (plan_visibility in ('all', 'assigned')),
   updated_at      timestamptz not null default now(),

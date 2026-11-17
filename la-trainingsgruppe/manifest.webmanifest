@@ -1,13 +1,13 @@
 {
-  "name": "Trainingsgruppe",
-  "short_name": "Training",
+  "name": "LT DSHS Köln",
+  "short_name": "LT DSHS",
   "lang": "de",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#F4F2EE",
-  "theme_color": "#F4F2EE",
+  "background_color": "#F4F4F3",
+  "theme_color": "#F4F4F3",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },

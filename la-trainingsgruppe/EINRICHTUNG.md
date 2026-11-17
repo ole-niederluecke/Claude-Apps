@@ -1,4 +1,4 @@
-# Trainingsgruppe – Einrichtung
+# LT DSHS Köln – Einrichtung
 
 Die App läuft wie die Darts-App über GitHub Pages. Damit alle dieselben Daten sehen, braucht sie zusätzlich eine kleine Datenbank bei **Supabase** (kostenlos, Server in Frankfurt). Die Einrichtung dauert etwa 15 Minuten und ist nur einmal nötig.
 

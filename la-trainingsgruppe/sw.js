@@ -1,5 +1,5 @@
 // Offline-Cache für die App-Hülle. Daten (Supabase) werden nie zwischengespeichert.
-const CACHE = "la-team-20261117-1";
+const CACHE = "la-team-20261117-2";
 const CORE = ["./", "index.html", "config.js", "vendor/supabase-2.118.0.js", "manifest.webmanifest",
   "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 self.addEventListener("install", e => {
