@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "18.11.2026 · 5";
+const VERSION = "18.11.2026 · 6";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -701,7 +701,8 @@ function viewAuth() {
   const title = { login: "Anmelden", register: "Registrieren", forgot: "Passwort vergessen" }[m];
   return `<div class="auth"><div class="brand"><img src="logo.png" alt="Logo Leichtathletik-Team DSHS Köln"><h1>LT DSHS Köln</h1><p class="muted">${title}</p></div>
     <div class="card">${note}${form}</div>
-    <p style="text-align:center"><button class="linkbtn small" data-act="demoStart">Ohne Konto ausprobieren (Demo)</button></p>
+    <div class="card"><h3>Erst mal umsehen?</h3><p class="small muted">Die Demo läuft nur auf diesem Gerät, mit Beispielpersonen. Du kannst zwischen Admin-, Trainer- und Athletenansicht wechseln und alles gefahrlos ausprobieren.</p>
+      <button class="btn ghost block" data-act="demoStart">Demo ohne Konto ansehen</button></div>
     ${S.be.kind === "supabase" && connection()?.source === "local" ? `<p style="text-align:center"><button class="linkbtn small" data-act="disconnect">Verbindung ändern</button></p>` : ""}</div>`;
 }
 function viewNewPassword() {
