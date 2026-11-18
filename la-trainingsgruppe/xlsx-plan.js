@@ -132,7 +132,7 @@
     // Übungen, die mit einer Zahl beginnen: "5er Hop", "10er SPL", "30m fliegend", "60m Hürden"
     if (/^\d+er\b/i.test(t) || /^\d+\s?m\s+(fliegend|aus|sprint|steigerung|tief|hürde|huerde|start)/i.test(t)) return false;
     if (/^(\d|\(|min\b|max\b|p\s*[:.]|sp\s*[:.]|sp\s+\d|i\.\s*\d|ggf\b|je\b|pro\b|ca\.?\s*\d)/i.test(t)) return true;
-    // Zielzeiten/Abstände: "Jungs 7,4-7,6s", "Emma/ Esther: 26-29s", "Abstände Eng (1,7-1,8m)"
+    // Zielzeiten/Abstände: "Jungs 7,4-7,6s", "Name/ Name: 26-29s", "Abstände Eng (1,7-1,8m)"
     const numeric = /\d+[,.]\d+/.test(t) || /\d\s*s\b/.test(t);
     if (numeric && t.length <= 60 && (/^(jungs|mädels|maedels|männer|frauen|alle|abstände|zeiten|ziel)/i.test(t) || /:/.test(t))) return true;
     if (/^\d{1,2}:\d{2}$/.test(t)) return true;
