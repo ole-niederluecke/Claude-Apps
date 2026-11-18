@@ -1,6 +1,10 @@
 # Claude Apps
 
-## Öl WG Darts Trainer
-Darts-Zähler und Trainings-App im Ordner [`oel-wg-darts/`](oel-wg-darts/): X01, Cricket, Trainingsspiele, Turniere (K.-o., Doppel-K.-o., Liga) und Statistiken.
+Jede App liegt in ihrem eigenen Ordner und ist unabhängig von den anderen.
 
-Die App läuft im Browser und lässt sich über „Zum Home-Bildschirm“ als App mit eigenem Symbol installieren. Sie funktioniert offline. Die Daten liegen nur auf dem jeweiligen Gerät, Sicherungen gehen über Einstellungen → Backup.
+| App | Ordner | Beschreibung |
+|---|---|---|
+| Öl WG Darts Trainer | [`oel-wg-darts/`](oel-wg-darts/) | Darts-Zähler und Trainings-App, offline, Daten nur auf dem Gerät |
+| LT DSHS Köln – Trainingsgruppe | [`la-trainingsgruppe/`](la-trainingsgruppe/) | Wochenplan, Zu-/Absagen, Übungen für die Leichtathletik-Trainingsgruppe |
+
+Auf oberster Ebene liegen nur diese Übersicht, die Startseite `index.html` mit Links zu beiden Apps und `.nojekyll` (nötig für GitHub Pages).
