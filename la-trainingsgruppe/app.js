@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "18.11.2026 · 4";
+const VERSION = "18.11.2026 · 5";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -91,8 +91,10 @@ darkMq.addEventListener?.("change", applyPrefs);
 function setPref(k, v) { prefs[k] = v; LS.set("la_prefs", prefs); applyPrefs(); render(); }
 
 /* ───────────── Backend: Supabase ───────────── */
-const BACKUP_TABLES = ["plan_groups", "plans", "plan_sheets", "exercises", "sessions", "session_weeks", "attendance", "attendance_private", "attendance_log"];
-const CONFLICT = { attendance: "session_id,user_id", attendance_private: "session_id,user_id", session_weeks: "week_start" };
+const BACKUP_TABLES = ["plan_groups", "plans", "plan_sheets", "exercises", "sessions", "session_weeks", "attendance", "attendance_private", "attendance_log",
+  "test_types", "norms", "athlete_info", "injuries", "test_results", "calendar_entries", "competition_results"];
+const CONFLICT = { attendance: "session_id,user_id", attendance_private: "session_id,user_id", session_weeks: "week_start", athlete_info: "user_id" };
+const ORDER = { test_types: ["sort_order", "name"], calendar_entries: ["start_date"], test_results: ["test_date"], competition_results: ["comp_date"], injuries: ["start_date"] };
 
 function makeSupabaseBackend(url, key) {
   const sb = window.supabase.createClient(url, key, {
@@ -162,6 +164,14 @@ function makeSupabaseBackend(url, key) {
     async attendanceLog(ids) { return ids.length ? ok(await T("attendance_log").select("*").in("session_id", ids).order("at")) : []; },
     async respond(session, user, status, reason, note) { ok(await sb.rpc("respond", { p_session: session, p_user: user, p_status: status, p_reason: reason || null, p_note: note || "" })); },
     async setMark(session, user, mark) { ok(await sb.rpc("set_mark", { p_session: session, p_user: user, p_mark: mark })); },
+    // Allgemeine Tabellen (Leistung, Kalender)
+    async list(table) { let q = T(table).select("*"); (ORDER[table] || []).forEach(c => { q = q.order(c); }); return ok(await q); },
+    async saveRow(table, row) {
+      if (table === "athlete_info") return ok(await T(table).upsert(row, { onConflict: "user_id" }).select().single());
+      if (row.id) { const { id, ...patch } = row; return ok(await T(table).update(patch).eq("id", id).select().single()); }
+      return ok(await T(table).insert(row).select().single());
+    },
+    async removeRow(table, id) { ok(await T(table).delete().eq("id", id)); },
     // Backup
     async dump(table) {
       const out = []; const size = 1000;
@@ -236,9 +246,67 @@ function demoSeed() {
   };
 }
 
+const DEMO_RULES = (() => {
+  const staffOnly = (n, o, c) => c.staff;
+  return {
+    athlete_info: { read: "staffSelf", defaults: { norm_group_ids: [] }, canWrite: staffOnly },
+    injuries: { read: "staffSelf", defaults: { note: "", exclude_attendance: true, exclude_tests: true, end_date: null }, canWrite: staffOnly },
+    test_types: { read: "member", defaults: { unit: "", category: "sonstiges", better: "higher", sides: false, entry: "staff", note: "", sort_order: 0, active: true }, canWrite: staffOnly },
+    norms: { read: "member", defaults: { group_id: null }, canWrite: staffOnly },
+    test_results: { read: "staffSelf", defaults: { note: "", value_left: null, value_right: null, entered_by: null },
+      canWrite: (n, o, c) => c.staff || (n.user_id === c.me && c.test && c.test.entry === "self" && (!o || o.entered_by === c.me)) },
+    calendar_entries: { read: "member", defaults: { end_date: null, location: "", note: "" }, canWrite: staffOnly },
+    competition_results: { read: "member", defaults: { entry_id: null, place: "", wind: "", note: "", better: "lower", entered_by: null },
+      canWrite: (n, o, c) => c.staff || (n.user_id === c.me && (!o || o.user_id === c.me)) }
+  };
+})();
+
+function demoPerformance(db) {
+  const T = (id, name, unit, category, better, sides, entry, note, sort_order) => ({ id, name, unit, category, better, sides, entry, note, sort_order, active: true });
+  db.test_types = [
+    T("t1", "30m fliegend", "s", "sprint", "lower", false, "staff", "30m Anlauf", 10), T("t2", "80m", "s", "sprint", "lower", false, "staff", "Kurzsprint", 11),
+    T("t3", "300m", "s", "sprint", "lower", false, "staff", "Langsprint", 12), T("t4", "5er Hop", "m", "sprung", "higher", true, "staff", "aus dem Stand, bester Versuch je Bein", 20),
+    T("t5", "10er SPL", "m", "sprung", "higher", false, "staff", "", 21), T("t6", "Standweitsprung", "m", "sprung", "higher", false, "staff", "", 22),
+    T("t7", "Umsetzen", "kg", "kraft", "higher", false, "self", "1RM", 31), T("t8", "Kniebeuge", "kg", "kraft", "higher", false, "self", "1RM", 32),
+    T("t9", "Bankdrücken", "kg", "kraft", "higher", false, "self", "1RM", 36), T("t10", "Klimmzug", "kg", "kraft", "higher", false, "self", "Zusatzgewicht bei 1RM", 39)
+  ];
+  const N = (id, test_id, sex, group_id, value) => ({ id, test_id, sex, group_id, value });
+  db.norms = [N("n1", "t1", "m", null, 3.4), N("n2", "t1", "w", null, 3.65), N("n3", "t2", "m", "g1", 9.9), N("n4", "t2", "w", "g1", 10.7),
+    N("n5", "t3", "m", "g2", 40.1), N("n6", "t3", "w", "g2", 45.3), N("n7", "t6", "m", null, 2.65), N("n8", "t6", "w", null, 2.35)];
+  const sex = { "u-admin": "m", u1: "w", u2: "m", u3: "w", u4: "m", u5: "w", u6: "m" };
+  db.athlete_info = Object.entries(sex).map(([user_id, s]) => ({ user_id, sex: s, norm_group_ids: user_id === "u4" ? ["g1"] : [] }));
+  const t = todayIso(), d = n => addDays(t, -n);
+  db.injuries = [{ id: "i1", user_id: "u6", start_date: d(25), end_date: null, note: "Muskelfaserriss Oberschenkel", exclude_attendance: true, exclude_tests: true }];
+  const R = []; let k = 0;
+  const r = (user_id, test_id, date, value, l, rr) => R.push({ id: "r" + (++k), user_id, test_id, test_date: date, value, value_left: l ?? null, value_right: rr ?? null, note: "", entered_by: "u-trainer", created_at: date + "T12:00:00Z" });
+  const dates = [d(120), d(60), d(6)];
+  const base = { u1: [3.70, 10.9, null, 2.38], u2: [3.30, 9.7, null, 2.80], u3: [3.66, null, 44.2, 2.42], u4: [3.25, 9.6, 39.0, 2.92], u5: [3.63, null, 43.8, 2.50] };
+  Object.entries(base).forEach(([u, [s30, s80, s300, sw]]) => dates.forEach((dt, i) => {
+    const f = 1 - i * 0.012;
+    r(u, "t1", dt, +(s30 * f).toFixed(2)); if (s80) r(u, "t2", dt, +(s80 * f).toFixed(2)); if (s300) r(u, "t3", dt, +(s300 * f).toFixed(1));
+    r(u, "t6", dt, +(sw * (1 + i * 0.015)).toFixed(2)); r(u, "t4", dt, null, +(sw * 4.9 + i * 0.2).toFixed(2), +(sw * 4.7 + i * 0.25).toFixed(2));
+  }));
+  R.filter(x => x.test_id === "t4").forEach(x => x.value = Math.max(x.value_left, x.value_right));
+  ["u1", "u2", "u3", "u4"].forEach((u, j) => dates.forEach((dt, i) => { r(u, "t8", dt, 80 + j * 15 + i * 5); r(u, "t7", dt, 50 + j * 10 + i * 2.5); }));
+  R.filter(x => ["t7", "t8"].includes(x.test_id)).forEach(x => x.entered_by = x.user_id);
+  db.test_results = R;
+  const C = (id, kind, title, start_date, end_date, location) => ({ id, kind, title, start_date, end_date, location, note: "", created_at: t });
+  db.calendar_entries = [
+    C("c1", "phase", "Allgemeine Vorbereitung", d(70), d(-20), ""), C("c2", "phase", "Hallensaison", d(-21), d(-110), ""),
+    C("c3", "testwoche", "Testwoche", d(6), d(1), ""), C("c4", "wettkampf", "Hallen-Meeting Leverkusen", d(-31), null, "Leverkusen"),
+    C("c5", "wettkampf", "NRW Hallenmeisterschaften", d(-66), d(-65), "Dortmund"), C("c6", "testwoche", "Testwoche", d(-56), d(-50), "")
+  ];
+  db.competition_results = [
+    { id: "w1", user_id: "u2", entry_id: null, comp_date: d(150), comp_name: "Sportfest Köln", discipline: "100m", result: "10,92", value: 10.92, better: "lower", place: "2", wind: "+0,8", note: "", entered_by: "u2" },
+    { id: "w2", user_id: "u2", entry_id: null, comp_date: d(110), comp_name: "Kreismeisterschaften", discipline: "100m", result: "10,85", value: 10.85, better: "lower", place: "1", wind: "+1,2", note: "", entered_by: "u2" },
+    { id: "w3", user_id: "u3", entry_id: null, comp_date: d(110), comp_name: "Kreismeisterschaften", discipline: "400m", result: "57,80", value: 57.8, better: "lower", place: "3", wind: "", note: "", entered_by: "u3" }
+  ];
+  return db;
+}
+
 function makeDemoBackend() {
-  const KEY = "la_demo_db_v2";
-  let db = LS.get(KEY, null) || demoSeed();
+  const KEY = "la_demo_db_v3";
+  let db = LS.get(KEY, null) || demoPerformance(demoSeed());
   const save = () => LS.set(KEY, db);
   const me = () => LS.get("la_demo_user", "u-admin");
   const meRow = () => db.profiles.find(p => p.id === me());
@@ -255,7 +323,7 @@ function makeDemoBackend() {
     kind: "demo", host: "Demo auf diesem Gerät",
     users: () => db.profiles.slice().sort(byName),
     switchUser(id) { LS.set("la_demo_user", id); },
-    reset() { db = demoSeed(); save(); LS.set("la_demo_user", "u-admin"); },
+    reset() { db = demoPerformance(demoSeed()); save(); LS.set("la_demo_user", "u-admin"); },
     async session() { const m = meRow(); return m ? { user: { id: m.id, email: email(m) } } : null; },
     onAuth() {},
     async signOut() {},
@@ -382,6 +450,34 @@ function makeDemoBackend() {
       db.attendance_log.push({ id: Date.now(), session_id: sid, user_id: user, status: null, reason: null, coach_mark: mark || "none", changed_by: me(), at: now() });
       save();
     },
+    async list(table) {
+      needMember(); const R = DEMO_RULES[table]; const rows = db[table] || [];
+      const vis = rows.filter(r => R.read === "member" || staff() || r.user_id === me());
+      const ord = ORDER[table] || [];
+      return clone(vis.slice().sort((a, b) => { for (const k of ord) { const c = String(a[k] ?? "").localeCompare(String(b[k] ?? ""), "de", { numeric: true }); if (c) return c; } return 0; }));
+    },
+    async saveRow(table, row) {
+      needMember(); const R = DEMO_RULES[table]; const list = db[table] = db[table] || [];
+      const key = table === "athlete_info" ? "user_id" : "id";
+      const old = list.find(r => r[key] === row[key]);
+      const n = Object.assign({}, old || {}, row);
+      if (!R.canWrite(n, old, { me: me(), staff: staff(), test: db.test_types.find(t => t.id === n.test_id) })) deny();
+      if (table === "test_results") {
+        const t = db.test_types.find(x => x.id === n.test_id);
+        if (t && t.sides && (n.value_left != null || n.value_right != null)) n.value = t.better === "lower" ? Math.min(...[n.value_left, n.value_right].filter(v => v != null)) : Math.max(...[n.value_left, n.value_right].filter(v => v != null));
+        if (n.value == null) deny("Bitte einen Wert eintragen");
+      }
+      if (table === "norms" && list.some(x => x.id !== n.id && x.test_id === n.test_id && x.sex === n.sex && (x.group_id || null) === (n.group_id || null))) deny("Diese Norm gibt es schon.");
+      if (old) Object.assign(old, n); else { if (key === "id" && !n.id) n.id = uid(); if (!n.created_at) n.created_at = now(); if ("entered_by" in R.defaults && !n.entered_by) n.entered_by = me(); list.push(Object.assign({}, R.defaults, n)); }
+      save(); return clone(old || list[list.length - 1]);
+    },
+    async removeRow(table, id) {
+      needMember(); const R = DEMO_RULES[table]; const old = (db[table] || []).find(r => r.id === id);
+      if (!old || !R.canWrite(old, old, { me: me(), staff: staff(), test: db.test_types.find(t => t.id === old.test_id), del: true })) deny();
+      db[table] = db[table].filter(r => r.id !== id);
+      if (table === "test_types") { db.norms = db.norms.filter(r => r.test_id !== id); db.test_results = db.test_results.filter(r => r.test_id !== id); }
+      save();
+    },
     async dump(table) { if (myRole() !== "admin") deny(); return clone(db[table] || []); },
     async upsert(table, rows) {
       if (myRole() !== "admin") deny();
@@ -398,8 +494,12 @@ const S = {
   be: null, user: null, me: null, profiles: [], emails: {}, groups: [], settings: null,
   plans: [], sheetCache: {}, exercises: [], sessions: [], att: [], priv: [], log: [],
   tab: LS.get("la_tab", "start"), authMode: "login", authMsg: null, recovery: false, loadError: null,
-  planView: "week", planWeek: null, planSheet: LS.get("la_sheet", null), exSearch: "", showPast: false, scrolledToday: false
+  planView: "week", planWeek: null, planSheet: LS.get("la_sheet", null), exSearch: "", showPast: false, scrolledToday: false,
+  tests: [], norms: [], results: [], ainfo: [], injuries: [], calendar: [], comps: [],
+  stats: { loaded: false }, statRange: "4w", statSort: "name", perfView: null, enterTest: null, enterDate: null,
+  termView: "training", moreView: "team", showPastCal: false
 };
+if (S.tab === "team") S.tab = "settings";
 const role = () => S.me && S.me.role;
 const isAdmin = () => role() === "admin";
 const isStaff = () => role() === "admin" || role() === "trainer";
@@ -431,7 +531,8 @@ async function loadAll() {
   S.sheetCache = {};
   S.emails = {};
   if (isStaff()) (await S.be.emails()).forEach(r => S.emails[r.id] = r.email);
-  await loadSessions();
+  await Promise.all([loadSessions(), reloadPerf()]);
+  S.stats = { loaded: false };
   const plan = planForWeek(mondayOf(todayIso()));
   if (plan) await sheetsOf(plan);
 }
@@ -495,6 +596,7 @@ const ICON = {
   start: svg('<path d="M3.5 10.5 12 4l8.5 6.5V20a1 1 0 0 1-1 1H15v-6H9v6H4.5a1 1 0 0 1-1-1z"/>'),
   plan: svg('<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M8.5 10h7M8.5 14h7M8.5 18h4"/>'),
   termine: svg('<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/>'),
+  leistung: svg('<path d="M4 20h16"/><path d="M6 16l4-5 3 3 5-7"/><path d="M15 7h3v3"/>'),
   team: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M15.5 4.6a3.5 3.5 0 0 1 0 6.8M17.5 14.6c2 .7 3.4 2.5 4 5.4"/>'),
   settings: svg('<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>'),
   chev: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>',
@@ -528,7 +630,7 @@ function render() {
   }
   const y = scrollY, sameTab = render.lastTab === S.tab;
   document.body.classList.remove("no-nav");
-  const views = { start: viewStart, plan: viewPlan, termine: viewTermine, team: viewTeam, settings: viewSettings };
+  const views = { start: viewStart, plan: viewPlan, termine: viewTermine, leistung: viewLeistung, settings: viewMore };
   if (!views[S.tab]) S.tab = "start";
   app.innerHTML = demoBar() + viewTop() + `<main>${views[S.tab]()}</main>` + viewNav();
   render.lastTab = S.tab;
@@ -556,7 +658,7 @@ function viewNav() {
   const n = isStaff() ? pending().length : 0;
   const ns = nextSession(), myOpen = ns && !attOf(ns.id, S.me.id)?.status && S.me.role === "athlete" ? 1 : 0;
   const b = (id, label, badge) => `<button data-act="tab" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ""}>${ICON[id]}${label}${badge ? `<span class="badge">${badge}</span>` : ""}</button>`;
-  return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Plan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("team", "Team", n)}${b("settings", "Mehr")}</div></nav>`;
+  return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Plan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("leistung", "Leistung")}${b("settings", "Mehr", n)}</div></nav>`;
 }
 function viewMessage(title, text, actions) {
   return `<div class="auth"><div class="brand"><img src="logo.png" alt="Logo Leichtathletik-Team DSHS Köln"><h1>${title}</h1></div><div class="card"><p>${text}</p>${actions}</div></div>`;
@@ -599,6 +701,7 @@ function viewAuth() {
   const title = { login: "Anmelden", register: "Registrieren", forgot: "Passwort vergessen" }[m];
   return `<div class="auth"><div class="brand"><img src="logo.png" alt="Logo Leichtathletik-Team DSHS Köln"><h1>LT DSHS Köln</h1><p class="muted">${title}</p></div>
     <div class="card">${note}${form}</div>
+    <p style="text-align:center"><button class="linkbtn small" data-act="demoStart">Ohne Konto ausprobieren (Demo)</button></p>
     ${S.be.kind === "supabase" && connection()?.source === "local" ? `<p style="text-align:center"><button class="linkbtn small" data-act="disconnect">Verbindung ändern</button></p>` : ""}</div>`;
 }
 function viewNewPassword() {
@@ -615,7 +718,9 @@ function viewStart() {
   const gname = groupName(me.plan_group_id);
   const n = isStaff() ? pending().length : 0;
   const ns = nextSession();
-  let html = n ? `<div class="notice"><div class="grow"><b>${n} ${n === 1 ? "Konto wartet" : "Konten warten"} auf Freischaltung</b></div><button class="btn sm" data-act="tab" data-tab="team">Ansehen</button></div>` : "";
+  let html = n ? `<div class="notice"><div class="grow"><b>${n} ${n === 1 ? "Konto wartet" : "Konten warten"} auf Freischaltung</b></div><button class="btn sm" data-act="goTeam">Ansehen</button></div>` : "";
+  const inj = currentInjury(me.id);
+  if (inj) html += `<div class="notice"><div class="grow"><b>Gute Besserung!</b> Du bist seit ${dm(inj.start_date)} als verletzt eingetragen.</div></div>`;
   html += `<div class="card hero"><h3>Hallo ${esc(firstName(me.display_name))}!</h3>
       <p style="margin:0">${roleChip(me.role)} ${gname ? `<span class="chip">${esc(gname)}</span>` : ""}</p></div>`;
   html += `<h2>Nächstes Training</h2>` + (ns ? sessionCard(ns) : `<div class="card muted">Keine Termine geplant.</div>`);
@@ -629,13 +734,18 @@ function viewStart() {
         <div class="small muted">${esc(d.items.slice(0, 6).map(i => i.text).join(" · "))}${d.items.length > 6 ? " …" : ""}</div>` : `<b class="daytitle">Kein Programm</b>`}
       </button>`;
   }
-  const athletes = S.profiles.filter(p => p.approved && p.role === "athlete");
-  html += `<h2>Team</h2><div class="card"><div class="stats">
+  const t2 = todayIso(), phase = S.calendar.find(e => e.kind === "phase" && e.start_date <= t2 && (e.end_date || e.start_date) >= t2);
+  const nextComp = S.calendar.filter(e => e.kind !== "phase" && (e.end_date || e.start_date) >= t2).sort((x, y) => x.start_date.localeCompare(y.start_date))[0];
+  if (phase || nextComp) html += `<h2>Saison</h2><button class="card linkcard" data-act="goSeason">
+      ${phase ? `<div class="small muted">Aktuelle Phase</div><b class="daytitle" style="margin:0 0 8px">${esc(phase.title)}${phase.end_date ? ` <span class="small muted">bis ${dm(phase.end_date)}</span>` : ""}</b>` : ""}
+      ${nextComp ? `<div class="small muted">Als Nächstes · ${KIND_LABEL[nextComp.kind]}</div><b>${esc(nextComp.title)}</b> <span class="small muted">${fmtDay(nextComp.start_date)} · in ${Math.round((parseIso(nextComp.start_date) - parseIso(t2)) / 864e5)} Tagen</span>` : ""}</button>`;
+  if (isStaff()) {
+    const athletes = S.profiles.filter(p => p.approved && p.role === "athlete");
+    html += `<h2>Team</h2><div class="card"><div class="stats">
       <div class="stat"><b>${athletes.length}</b><span>Athleten</span></div>
-      <div class="stat"><b>${S.profiles.filter(p => p.approved && p.role !== "athlete").length}</b><span>Trainer &amp; Admins</span></div>
-      <div class="stat"><b>${S.exercises.length}</b><span>Übungen</span></div></div></div>
-    <h2>Kommt als Nächstes</h2>
-    <div class="card"><ul class="soon"><li>Testwochen mit Verlauf und Abgleich mit Gruppennormen</li><li>Wettkampfergebnisse und Saisonkalender</li><li>Statistik für Trainer</li></ul></div>`;
+      <div class="stat"><b>${athletes.filter(p => currentInjury(p.id)).length}</b><span>verletzt</span></div>
+      <div class="stat"><b>${S.exercises.length}</b><span>Übungen</span></div></div></div>`;
+  }
   return html;
 }
 
@@ -730,6 +840,11 @@ function sessionCard(s, compact) {
     <button class="counts" data-act="sessOpen" data-id="${esc(s.id)}"><span><b>${c.yes}</b> dabei</span><span><b>${c.no}</b> abgesagt</span><span><b>${c.open}</b> offen</span>${ICON.chev}</button></div>`;
 }
 function viewTermine() {
+  const seg = `<div class="seg" style="margin-bottom:14px"><button data-act="termView" data-v="training" aria-pressed="${S.termView !== "season"}">Training</button><button data-act="termView" data-v="season" aria-pressed="${S.termView === "season"}">Saison &amp; Wettkämpfe</button></div>`;
+  if (S.termView === "season") return seg + viewSeason();
+  return seg + viewTraining();
+}
+function viewTraining() {
   const mon = mondayOf(todayIso()), t = todayIso();
   const upcoming = S.sessions.filter(s => s.session_date >= t);
   const past = S.sessions.filter(s => s.session_date < t).reverse();
@@ -747,6 +862,12 @@ function viewTermine() {
   return html;
 }
 
+/* ───── Mehr: Team + Einstellungen ───── */
+function viewMore() {
+  const n = isStaff() ? pending().length : 0;
+  return `<div class="seg" style="margin-bottom:14px"><button data-act="moreView" data-v="team" aria-pressed="${S.moreView === "team"}">Team${n ? ` (${n})` : ""}</button><button data-act="moreView" data-v="settings" aria-pressed="${S.moreView === "settings"}">Einstellungen</button></div>`
+    + (S.moreView === "settings" ? viewSettings() : viewTeam());
+}
 /* ───── Team ───── */
 function memberRow(p) {
   const g = groupName(p.plan_group_id);
@@ -843,6 +964,513 @@ function templateRow(t, i) {
     <button type="button" class="iconbtn" data-act="tplRemove" aria-label="Entfernen">${ICON.trash}</button></div>`;
 }
 
+/* ───────────── Leistung: Logik ───────────── */
+const CAT_LABEL = { sprint: "Sprint", sprung: "Sprung", kraft: "Kraft", sonstiges: "Sonstiges" };
+const KIND_LABEL = { phase: "Phase", wettkampf: "Wettkampf", testwoche: "Testwoche", sonstiges: "Termin" };
+const nowHm = () => new Date().toTimeString().slice(0, 5);
+function parseVal(str) {
+  const t = String(str || "").trim().replace(/\s+/g, "").replace(/,/g, ".");
+  if (!t) return null;
+  const m = t.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/);
+  if (m) return Number(m[1]) * 60 + Number(m[2]);
+  const n = Number(t.replace(/[^\d.\-]/g, ""));
+  return t.replace(/[^\d.\-]/g, "") && isFinite(n) ? n : null;
+}
+function fmtNum(v, unit) {
+  if (v == null || v === "" || !isFinite(v)) return "–";
+  v = Number(v);
+  if (unit === "s" && v >= 60) { const m = Math.floor(v / 60), r = v - m * 60; return `${m}:${r.toFixed(2).padStart(5, "0").replace(".", ",")}`; }
+  const d = unit === "kg" ? (Number.isInteger(v) ? 0 : 1) : 2;
+  return v.toFixed(d).replace(".", ",");
+}
+const fmtVal = (v, unit) => fmtNum(v, unit) + (unit && v != null ? (unit === "s" && v >= 60 ? "" : " " + unit) : "");
+const testById = id => S.tests.find(t => t.id === id);
+const infoOf = u => S.ainfo.find(i => i.user_id === u) || { user_id: u, sex: null, norm_group_ids: [] };
+const groupsOf = u => { const p = person(u) || {}; return [p.plan_group_id, ...(infoOf(u).norm_group_ids || [])].filter(Boolean); };
+function normFor(test, u) {
+  const sex = infoOf(u).sex; if (!sex || !test) return null;
+  const g = groupsOf(u);
+  const list = S.norms.filter(n => n.test_id === test.id && n.sex === sex && (!n.group_id || g.includes(n.group_id)));
+  return list.find(n => n.group_id) || list[0] || null;
+}
+const normApplies = (test, u) => { const sex = infoOf(u).sex; return S.norms.some(n => n.test_id === test.id && (!sex || n.sex === sex) && (!n.group_id || groupsOf(u).includes(n.group_id))); };
+const meets = (test, v, norm) => norm && v != null && (test.better === "lower" ? Number(v) <= Number(norm.value) : Number(v) >= Number(norm.value));
+const resultsOf = (u, tid) => S.results.filter(r => r.user_id === u && r.test_id === tid).sort((a, b) => a.test_date.localeCompare(b.test_date) || String(a.created_at).localeCompare(String(b.created_at)));
+const bestOf = (test, rows) => rows.reduce((b, r) => b == null || (test.better === "lower" ? r.value < b.value : r.value > b.value) ? r : b, null);
+const injuriesOf = u => S.injuries.filter(i => i.user_id === u).sort((a, b) => b.start_date.localeCompare(a.start_date));
+const injuredOn = (u, date, kind) => S.injuries.some(i => i.user_id === u && i.start_date <= date && (!i.end_date || i.end_date >= date) && (!kind || i[kind]));
+const currentInjury = u => S.injuries.find(i => i.user_id === u && i.start_date <= todayIso() && (!i.end_date || i.end_date >= todayIso())) || null;
+const mayEnterTest = (test, u) => isStaff() || (test.entry === "self" && u === S.me.id);
+const mayDeleteResult = r => isStaff() || (r.user_id === S.me.id && r.entered_by === S.me.id && (testById(r.test_id) || {}).entry === "self");
+
+function normStatus(u) {
+  // Normen der zuletzt gemessenen Werte; fehlende Tests nur, wenn nicht von Tests befreit
+  let met = 0, total = 0, missing = 0;
+  const exempt = injuredOn(u, todayIso(), "exclude_tests");
+  S.tests.filter(t => t.active).forEach(t => {
+    const n = normFor(t, u); if (!n) return;
+    const rows = resultsOf(u, t.id), last = rows[rows.length - 1];
+    if (!last) { if (!exempt) missing++; return; }
+    total++; if (meets(t, last.value, n)) met++;
+  });
+  return { met, total, missing, exempt };
+}
+function attendanceStats(u, sessions, att) {
+  const t = todayIso(), hm = nowHm();
+  const res = { counted: 0, attended: 0, yes: 0, no: 0, open: 0, late: 0, noShow: 0, flipped: 0, excluded: 0, reasons: {} };
+  sessions.forEach(s => {
+    if (s.cancelled || s.session_date > t || (s.session_date === t && s.start_time && hhmm(s.start_time) > hm)) return;
+    if (injuredOn(u, s.session_date, "exclude_attendance")) { res.excluded++; return; }
+    res.counted++;
+    const a = att.find(x => x.session_id === s.id && x.user_id === u);
+    const st = a && a.status, mk = a && a.coach_mark;
+    if (st === "yes") res.yes++; else if (st === "no") res.no++; else res.open++;
+    if (mk === "late") res.late++;
+    if (mk === "no_show") res.noShow++;
+    if ((st === "yes" && mk !== "no_show") || mk === "late") res.attended++;
+    if (st === "no" && (S.stats.log || []).some(l => l.session_id === s.id && l.user_id === u && l.status === "yes")) res.flipped++;
+    if (st === "no") { const pr = (S.stats.priv || []).find(x => x.session_id === s.id && x.user_id === u); const k = pr ? pr.reason : "unbekannt"; res.reasons[k] = (res.reasons[k] || 0) + 1; }
+  });
+  res.rate = res.counted ? Math.round(res.attended / res.counted * 100) : null;
+  return res;
+}
+const STAT_RANGES = { "4w": ["4 Wochen", 28], "3m": ["3 Monate", 91], "season": ["Saison", 365] };
+async function loadStats() {
+  const days = STAT_RANGES[S.statRange][1], from = addDays(todayIso(), -days);
+  if (S.stats.from === from && S.stats.loaded) return;
+  const sessions = await S.be.sessions(from, todayIso());
+  const ids = sessions.map(s => s.id), att = [], priv = [], log = [];
+  for (let i = 0; i < ids.length; i += 80) {
+    const part = ids.slice(i, i + 80);
+    const [a, p, l] = await Promise.all([S.be.attendance(part), S.be.attendancePrivate(part), S.be.attendanceLog(part)]);
+    att.push(...a); priv.push(...p); log.push(...l);
+  }
+  S.stats = { from, sessions, att, priv, log, loaded: true };
+}
+const RUN_RE = /^\s*(\d+\s*x\s*)?\d+(\s*m)?\b|hürden|huerden|lauf|staffel|gehen|cross/i;
+const betterFor = disc => /(weit|hoch|stab|drei|kugel|diskus|speer|hammer|ball|kampf|punkte)/i.test(disc) ? "higher" : RUN_RE.test(disc) ? "lower" : "higher";
+const DISCIPLINES = ["60m", "100m", "200m", "300m", "400m", "800m", "1500m", "60m Hürden", "100m Hürden", "110m Hürden", "400m Hürden", "4x100m", "4x400m", "Weitsprung", "Hochsprung", "Stabhochsprung", "Dreisprung", "Kugelstoß", "Diskuswurf", "Speerwurf", "Siebenkampf", "Zehnkampf"];
+function pbMap(u) {
+  const m = {};
+  S.comps.filter(c => c.user_id === u && c.value != null).forEach(c => {
+    const k = c.discipline.trim().toLowerCase(), b = m[k];
+    if (!b || (c.better === "lower" ? c.value < b.value : c.value > b.value)) m[k] = c;
+  });
+  return m;
+}
+
+/* ───── Diagramm: Verlauf eines Tests (eine Linie, Norm als Bezugslinie) ───── */
+function lineChart(test, rows, norm) {
+  if (!rows.length) return "";
+  const W = 320, H = 160, pl = 44, pr = 12, pt = 16, pb = 26;
+  const xs = rows.map(r => parseIso(r.test_date).getTime());
+  let x0 = Math.min(...xs), x1 = Math.max(...xs); if (x0 === x1) { x0 -= 7 * 864e5; x1 += 7 * 864e5; }
+  const vals = rows.map(r => Number(r.value)).concat(norm ? [Number(norm.value)] : []);
+  let y0 = Math.min(...vals), y1 = Math.max(...vals); const padY = (y1 - y0) * 0.18 || Math.abs(y1) * 0.04 || 1; y0 -= padY; y1 += padY;
+  const inv = test.better === "lower"; // Zeiten: kleiner ist besser → oben
+  const X = t => pl + (t - x0) / (x1 - x0) * (W - pl - pr);
+  const Y = v => inv ? pt + (v - y0) / (y1 - y0) * (H - pt - pb) : H - pb - (v - y0) / (y1 - y0) * (H - pt - pb);
+  const ticks = [0, 0.5, 1].map(f => y0 + (y1 - y0) * f);
+  const path = rows.map((r, i) => `${i ? "L" : "M"}${X(xs[i]).toFixed(1)},${Y(r.value).toFixed(1)}`).join("");
+  const pts = rows.map((r, i) => {
+    const x = X(xs[i]), y = Y(r.value), label = `${dm(r.test_date)}: ${fmtVal(r.value, test.unit)}`;
+    const tw = label.length * 6.4 + 12, tx = Math.min(Math.max(x - tw / 2, 2), W - tw - 2), ty = y < 40 ? y + 12 : y - 30;
+    return `<g class="pt" tabindex="0" aria-label="${esc(label)}"><circle cx="${x}" cy="${y}" r="14" fill="transparent"/>
+      <circle cx="${x}" cy="${y}" r="4.5" class="dot"/><g class="tip"><rect x="${tx}" y="${ty}" width="${tw}" height="20" rx="6"/><text x="${tx + tw / 2}" y="${ty + 14}" text-anchor="middle">${esc(label)}</text></g></g>`;
+  }).join("");
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Verlauf ${esc(test.name)}">
+    ${ticks.map(v => `<line x1="${pl}" x2="${W - pr}" y1="${Y(v)}" y2="${Y(v)}" class="grid"/><text x="${pl - 6}" y="${Y(v) + 4}" text-anchor="end" class="ax">${esc(fmtNum(v, test.unit))}</text>`).join("")}
+    ${norm ? `<line x1="${pl}" x2="${W - pr}" y1="${Y(norm.value)}" y2="${Y(norm.value)}" class="norm"/><text x="${W - pr}" y="${Y(norm.value) - 5}" text-anchor="end" class="ax">Norm ${esc(fmtNum(norm.value, test.unit))}</text>` : ""}
+    <path d="${path}" class="line"/>${pts}
+    <text x="${pl}" y="${H - 6}" class="ax">${dm(rows[0].test_date)}</text><text x="${W - pr}" y="${H - 6}" text-anchor="end" class="ax">${dm(rows[rows.length - 1].test_date)}</text>
+    <text x="${(pl + W - pr) / 2}" y="${H - 6}" text-anchor="middle" class="ax">${inv ? "oben = schneller" : "oben = besser"}</text></svg>`;
+}
+
+/* ───────────── Leistung: Ansichten ───────────── */
+function normBadge(test, value, norm) {
+  if (!norm || value == null) return "";
+  const ok = meets(test, value, norm), diff = Math.abs(Number(value) - Number(norm.value));
+  return ok ? `<span class="chip ok">✓ Norm</span>` : `<span class="chip off">✗ ${esc(fmtNum(diff, test.unit))} ${esc(test.unit)} fehlen</span>`;
+}
+function testRows(u) {
+  const cats = ["sprint", "sprung", "kraft", "sonstiges"];
+  return cats.map(c => {
+    const tests = S.tests.filter(t => t.active && t.category === c); if (!tests.length) return "";
+    return `<div class="subhead">${CAT_LABEL[c]}</div>` + tests.map(t => {
+      const rows = resultsOf(u, t.id), last = rows[rows.length - 1], best = bestOf(t, rows), n = normFor(t, u);
+      const sideTxt = last && t.sides ? ` <span class="muted small">(L ${fmtNum(last.value_left, t.unit)} · R ${fmtNum(last.value_right, t.unit)})</span>` : "";
+      return `<button class="row" data-act="testOpen" data-uid="${esc(u)}" data-tid="${esc(t.id)}">
+        <span class="grow"><span class="name">${esc(t.name)}${t.entry === "self" ? "" : ' <span class="muted small">· Trainer</span>'}</span>
+        <span class="meta">${last ? `${dm(last.test_date)} · ${rows.length > 1 && best !== last ? "Bestwert " + esc(fmtVal(best.value, t.unit)) : rows.length + " Messung" + (rows.length > 1 ? "en" : "")}` : (n ? "noch kein Wert" : "&nbsp;")}${n ? ` · Norm ${esc(fmtVal(n.value, t.unit))}` : ""}</span></span>
+        <span class="val">${last ? esc(fmtVal(last.value, t.unit)) + sideTxt : "–"}</span>${normBadge(t, last && last.value, n)}<span class="chev">${ICON.chev}</span></button>`;
+    }).join("");
+  }).join("");
+}
+function viewLeistung() {
+  const staff = isStaff();
+  const segs = staff ? [["overview", "Übersicht"], ["enter", "Eintragen"], ["comps", "Wettkämpfe"], ["setup", "Normen"]] : [["mine", "Meine Werte"], ["comps", "Wettkämpfe"]];
+  if (!segs.some(([v]) => v === S.perfView)) S.perfView = segs[0][0];
+  let html = `<div class="seg" style="margin-bottom:14px">${segs.map(([v, l]) => `<button data-act="perfView" data-v="${v}" aria-pressed="${S.perfView === v}">${l}</button>`).join("")}</div>`;
+  if (S.perfView === "mine") {
+    const inj = currentInjury(S.me.id);
+    if (inj) html += `<div class="notice"><div class="grow"><b>Als verletzt eingetragen</b> seit ${dm(inj.start_date)}${inj.note ? " – " + esc(inj.note) : ""}${inj.exclude_tests ? "<div class='small muted'>Fehlende Tests werden nicht angerechnet.</div>" : ""}</div></div>`;
+    if (!infoOf(S.me.id).sex && S.norms.length) html += `<p class="small muted">Für den Abgleich mit den Normen trägt dein Trainer noch ein, ob für dich die Normen der Jungs oder der Mädels gelten.</p>`;
+    html += `<div class="card flush">${testRows(S.me.id)}</div><p class="small muted" style="margin:8px 4px">Krafttests trägst du selbst ein (Wert antippen). Sprint- und Sprungtests trägt der Trainer ein. Deine Werte sehen nur du und die Trainer.</p>`;
+    return html;
+  }
+  if (S.perfView === "comps") return html + viewComps();
+  if (S.perfView === "setup") return html + viewNormSetup();
+  if (S.perfView === "enter") return html + viewEnter();
+  return html + viewOverview();
+}
+function viewOverview() {
+  if (!S.stats.loaded || S.stats.from !== addDays(todayIso(), -STAT_RANGES[S.statRange][1])) {
+    loadStats().then(render).catch(e => toast(deErr(e), "error"));
+    return `<div class="card muted">Statistik wird geladen …</div>`;
+  }
+  const athletes = S.profiles.filter(p => p.approved && p.role === "athlete");
+  const rows = athletes.map(p => ({ p, a: attendanceStats(p.id, S.stats.sessions, S.stats.att), n: normStatus(p.id), inj: currentInjury(p.id) }));
+  const rated = rows.filter(r => r.a.rate != null);
+  const avg = rated.length ? Math.round(rated.reduce((s, r) => s + r.a.rate, 0) / rated.length) : null;
+  const metAll = rows.filter(r => r.n.total && r.n.met === r.n.total && !r.n.missing).length;
+  const sorted = rows.sort((a, b) => S.statSort === "rate" ? (b.a.rate ?? -1) - (a.a.rate ?? -1) : S.statSort === "norm" ? (b.n.total ? b.n.met / b.n.total : -1) - (a.n.total ? a.n.met / a.n.total : -1) : byName(a.p, b.p));
+  const seg = Object.entries(STAT_RANGES).map(([k, [l]]) => `<button data-act="statRange" data-v="${k}" aria-pressed="${S.statRange === k}">${l}</button>`).join("");
+  return `<div class="seg" style="margin-bottom:12px">${seg}</div>
+    <div class="stats" style="margin-bottom:12px">
+      <div class="stat"><b>${avg == null ? "–" : avg + " %"}</b><span>Ø Trainingsbeteiligung</span></div>
+      <div class="stat"><b>${metAll}/${rows.length}</b><span>erfüllen alle Normen</span></div>
+      <div class="stat"><b>${rows.filter(r => r.inj).length}</b><span>verletzt</span></div></div>
+    <div class="sortrow small muted">Sortieren: ${[["name", "Name"], ["rate", "Beteiligung"], ["norm", "Normen"]].map(([k, l]) => `<button class="linkbtn small" data-act="statSort" data-v="${k}" ${S.statSort === k ? 'aria-pressed="true"' : ""}>${l}</button>`).join(" · ")}</div>
+    <div class="card flush">${sorted.map(({ p, a, n, inj }) => `<button class="row" data-act="athleteOpen" data-id="${esc(p.id)}">
+      <span class="grow"><span class="name">${esc(p.display_name)} ${inj ? '<span class="chip off">verletzt</span>' : ""}</span>
+      <span class="meta">${esc(groupName(p.plan_group_id) || "keine Gruppe")}${a.counted ? ` · ${a.attended}/${a.counted} Trainings` : ""}${a.flipped ? ` · ${a.flipped}× umentschieden` : ""}${a.late ? ` · ${a.late}× zu spät` : ""}</span>
+      <span class="bar" aria-hidden="true"><i style="width:${a.rate ?? 0}%"></i></span></span>
+      <span class="statcol"><b>${a.rate == null ? "–" : a.rate + " %"}</b><span class="small muted">${n.total || n.missing ? `Normen ${n.met}/${n.total + n.missing}` : "keine Norm"}</span></span>
+      <span class="chev">${ICON.chev}</span></button>`).join("") || `<div class="row muted">Noch keine Athleten</div>`}</div>
+    <p class="small muted" style="margin:8px 4px">Trainingsbeteiligung: Anteil der vergangenen gemeinsamen Trainings, bei denen jemand da war (zugesagt und nicht als „nicht erschienen“ markiert). Zeiten mit Verletzung zählen nicht mit, wenn das so eingetragen ist. Normen: zuletzt gemessener Wert je Test.</p>`;
+}
+function viewEnter() {
+  const tests = S.tests.filter(t => t.active);
+  if (!tests.length) return `<div class="card muted">Noch keine Tests angelegt (unter „Normen“).</div>`;
+  const t = testById(S.enterTest) || tests[0]; S.enterTest = t.id;
+  const date = S.enterDate || todayIso();
+  const athletes = S.profiles.filter(p => p.approved && p.role === "athlete");
+  const inp = (name, v) => `<input type="text" inputmode="decimal" name="${name}" value="${v == null ? "" : esc(fmtNum(v, t.unit))}" placeholder="${esc(t.unit)}" autocomplete="off">`;
+  return `<div class="card">
+    <div class="two"><label class="f"><span>Test</span><select data-change="enterTest">${tests.map(x => `<option value="${esc(x.id)}" ${x.id === t.id ? "selected" : ""}>${esc(x.name)}${x.unit ? " (" + esc(x.unit) + ")" : ""}</option>`).join("")}</select></label>
+    <label class="f"><span>Datum</span><input type="date" value="${esc(date)}" data-change="enterDate"></label></div>
+    <p class="small muted" style="margin:0">${esc(t.note || "")}${t.sides ? " · links und rechts jeweils der beste Versuch" : ""}${t.unit === "s" ? " · Zeiten über 60 s als 1:52,30 eingeben" : ""}</p></div>
+    <form data-form="bulkResults" data-tid="${esc(t.id)}" data-date="${esc(date)}"><div class="card flush">${athletes.map(p => {
+      const ex = S.results.find(r => r.user_id === p.id && r.test_id === t.id && r.test_date === date);
+      const inj = injuredOn(p.id, date, "exclude_tests"), n = normFor(t, p.id);
+      return `<div class="row enterrow ${inj ? "dim" : ""}"><span class="grow"><span class="name">${esc(p.display_name)}</span>
+        <span class="meta">${inj ? "verletzt · " : ""}${n ? "Norm " + esc(fmtVal(n.value, t.unit)) : esc(groupName(p.plan_group_id) || "")}</span></span>
+        ${t.sides ? `<label class="lr">L ${inp("l_" + p.id, ex && ex.value_left)}</label><label class="lr">R ${inp("r_" + p.id, ex && ex.value_right)}</label>` : inp("v_" + p.id, ex && ex.value)}</div>`;
+    }).join("")}</div>
+    <div class="btns"><button class="btn block">Werte speichern</button></div></form>`;
+}
+function viewNormSetup() {
+  return `<div class="btns" style="margin:0 0 10px"><button class="btn ghost" data-act="testTypeNew">+ Test</button></div>
+    <div class="card flush">${["sprint", "sprung", "kraft", "sonstiges"].map(c => {
+      const tests = S.tests.filter(t => t.category === c); if (!tests.length) return "";
+      return `<div class="subhead">${CAT_LABEL[c]}</div>` + tests.map(t => {
+        const ns = S.norms.filter(n => n.test_id === t.id);
+        return `<button class="row" data-act="testTypeOpen" data-id="${esc(t.id)}"><span class="grow"><span class="name">${esc(t.name)} ${t.active ? "" : '<span class="chip">inaktiv</span>'}</span>
+          <span class="meta">${esc(t.unit || "ohne Einheit")} · ${t.better === "lower" ? "weniger ist besser" : "mehr ist besser"} · ${t.entry === "self" ? "Athlet trägt ein" : "Trainer trägt ein"}${t.sides ? " · links/rechts" : ""}</span>
+          ${ns.length ? `<span class="meta">${ns.map(n => `${n.sex === "m" ? "Jungs" : "Mädels"}${n.group_id ? " (" + esc(groupName(n.group_id) || "?") + ")" : ""} ${esc(fmtNum(n.value, t.unit))}`).join(" · ")}</span>` : ""}</span><span class="chev">${ICON.chev}</span></button>`;
+      }).join("");
+    }).join("")}</div>
+    <p class="small muted" style="margin:8px 4px">Normen gelten je Geschlecht, auf Wunsch nur für eine Trainingsgruppe (z. B. 80m nur Kurzsprint). Wer in mehreren Gruppen trainiert, bekommt die weiteren Gruppen im Athletenprofil (Übersicht → Name).</p>`;
+}
+function viewComps() {
+  const mine = S.comps.filter(c => c.user_id === S.me.id);
+  const pbs = pbMap(S.me.id);
+  let html = `<div class="btns" style="margin:0 0 10px"><button class="btn" data-act="compNew">+ Ergebnis eintragen</button></div>`;
+  if (!isStaff() || mine.length) {
+    html += `<h2>Meine Bestleistungen</h2>` + (Object.keys(pbs).length ? `<div class="card flush">${Object.values(pbs).sort((a, b) => a.discipline.localeCompare(b.discipline, "de", { numeric: true })).map(c => `<div class="row"><span class="grow"><span class="name">${esc(c.discipline)}</span><span class="meta">${esc(c.comp_name)} · ${dm(c.comp_date)}${String(c.comp_date).slice(0, 4) !== String(todayIso()).slice(0, 4) ? String(c.comp_date).slice(2, 4) : ""}</span></span><span class="val">${esc(c.result)}</span></div>`).join("")}</div>` : `<div class="card muted">Noch keine Ergebnisse.</div>`);
+  }
+  const recent = S.comps.slice().sort((a, b) => b.comp_date.localeCompare(a.comp_date)).slice(0, 60);
+  const groups = {};
+  recent.forEach(c => { const k = c.comp_date + "|" + c.comp_name; (groups[k] = groups[k] || []).push(c); });
+  html += `<h2>Ergebnisse der Gruppe</h2>` + (recent.length ? Object.entries(groups).map(([k, list]) => {
+    const [d, name] = k.split("|");
+    return `<div class="card flush"><div class="subhead">${esc(name)} · ${fmtDay(d)}</div>${list.map(c => {
+      const pb = pbMap(c.user_id)[c.discipline.trim().toLowerCase()];
+      const editable = isStaff() || c.user_id === S.me.id;
+      const inner = `<span class="grow"><span class="name">${esc((person(c.user_id) || {}).display_name || "?")}</span><span class="meta">${esc(c.discipline)}${c.place ? " · Platz " + esc(c.place) : ""}${c.wind ? " · Wind " + esc(c.wind) : ""}${c.note ? " · " + esc(c.note) : ""}</span></span>
+        <span class="val">${esc(c.result)}</span>${pb && pb.id === c.id ? '<span class="chip solid">PB</span>' : ""}`;
+      return editable ? `<button class="row" data-act="compEdit" data-id="${esc(c.id)}">${inner}<span class="chev">${ICON.chev}</span></button>` : `<div class="row">${inner}</div>`;
+    }).join("")}</div>`;
+  }).join("") : `<div class="card muted">Noch keine Wettkampfergebnisse.</div>`);
+  return html;
+}
+function viewSeason() {
+  const t = todayIso();
+  const entries = S.calendar.slice().sort((a, b) => a.start_date.localeCompare(b.start_date));
+  const phase = entries.find(e => e.kind === "phase" && e.start_date <= t && (e.end_date || e.start_date) >= t);
+  const upcoming = entries.filter(e => (e.end_date || e.start_date) >= t);
+  const past = entries.filter(e => (e.end_date || e.start_date) < t).reverse();
+  const phases = entries.filter(e => e.kind === "phase");
+  let html = isStaff() ? `<div class="btns" style="margin:0 0 10px"><button class="btn ghost" data-act="calNew">+ Eintrag</button></div>` : "";
+  if (phases.length) {
+    const lo = phases[0].start_date, hi = phases.reduce((m, p) => (p.end_date || p.start_date) > m ? (p.end_date || p.start_date) : m, phases[0].end_date || phases[0].start_date);
+    const span = Math.max(1, (parseIso(hi) - parseIso(lo)) / 864e5);
+    const pos = d => Math.min(100, Math.max(0, (parseIso(d) - parseIso(lo)) / 864e5 / span * 100));
+    html += `<div class="card"><div class="small muted">Periodisierung</div>
+      <div class="timeline">${phases.map((p, i) => `<div class="tl-phase ${p === phase ? "cur" : ""} ${i % 2 ? "alt" : ""}" style="left:${pos(p.start_date)}%;width:${Math.max(2, pos(p.end_date || p.start_date) - pos(p.start_date))}%" title="${esc(p.title)}"><span>${esc(p.title)}</span></div>`).join("")}
+      ${t >= lo && t <= hi ? `<div class="tl-today" style="left:${pos(t)}%"></div>` : ""}
+      ${entries.filter(e => e.kind !== "phase" && e.start_date >= lo && e.start_date <= hi).map(e => `<div class="tl-mark ${e.kind}" style="left:${pos(e.start_date)}%" title="${esc(e.title)}"></div>`).join("")}</div>
+      <div class="small muted tl-legend"><span>${dm(lo)}</span><span>${phase ? `Jetzt: <b>${esc(phase.title)}</b>` : ""}</span><span>${dm(hi)}</span></div>
+      <div class="small muted"><span class="lg wk"></span> Wettkampf <span class="lg tw"></span> Testwoche</div></div>`;
+  }
+  const entryRow = e => `<button class="row" data-act="calOpen" data-id="${esc(e.id)}"><span class="kind ${e.kind}">${KIND_LABEL[e.kind]}</span>
+    <span class="grow"><span class="name">${esc(e.title)}</span><span class="meta">${fmtDay(e.start_date)}${e.end_date && e.end_date !== e.start_date ? " – " + fmtDay(e.end_date) : ""}${e.location ? " · " + esc(e.location) : ""}</span></span><span class="chev">${ICON.chev}</span></button>`;
+  const months = {};
+  upcoming.forEach(e => { const k = e.start_date.slice(0, 7); (months[k] = months[k] || []).push(e); });
+  const mName = k => new Date(k + "-01T12:00:00").toLocaleDateString("de-DE", { month: "long", year: "numeric" });
+  html += Object.keys(months).length ? Object.entries(months).map(([k, list]) => `<h2>${esc(mName(k))}</h2><div class="card flush">${list.map(entryRow).join("")}</div>`).join("")
+    : `<div class="card muted">${isStaff() ? "Noch nichts geplant. Trage Phasen, Wettkämpfe und Testwochen ein." : "Noch keine Saisonplanung eingetragen."}</div>`;
+  if (past.length) html += `<h2>Vergangen</h2><div class="card flush">${(S.showPastCal ? past : past.slice(0, 3)).map(entryRow).join("")}${!S.showPastCal && past.length > 3 ? `<button class="row muted" data-act="showPastCal">Alle ${past.length} anzeigen</button>` : ""}</div>`;
+  return html;
+}
+
+/* ───── Leistung: Dialoge ───── */
+function testSheet(u, tid) {
+  const t = testById(tid), rows = resultsOf(u, tid), n = normFor(t, u), p = person(u);
+  const canAdd = mayEnterTest(t, u);
+  const best = bestOf(t, rows);
+  sheet(`<h3>${esc(t.name)}</h3><p class="small muted">${u !== S.me.id ? esc(p.display_name) + " · " : ""}${esc(t.note || "")}${n ? ` · Norm ${esc(fmtVal(n.value, t.unit))}` : ""}</p>
+    ${rows.length ? lineChart(t, rows, n) : `<p class="muted small">Noch keine Werte.</p>`}
+    ${rows.length ? `<div class="card flush"><div class="subhead">Werte · Bestwert ${esc(fmtVal(best.value, t.unit))}</div>${rows.slice().reverse().map(r => `<div class="row"><span class="grow"><span class="name">${esc(fmtVal(r.value, t.unit))}${t.sides ? ` <span class="muted small">L ${fmtNum(r.value_left, t.unit)} · R ${fmtNum(r.value_right, t.unit)}</span>` : ""}</span>
+      <span class="meta">${fmtDay(r.test_date)}${r.note ? " · " + esc(r.note) : ""}</span></span>${normBadge(t, r.value, n)}
+      ${mayDeleteResult(r) ? `<button class="iconbtn" data-act="resultDelete" data-id="${esc(r.id)}" data-uid="${esc(u)}" aria-label="Wert löschen">${ICON.trash}</button>` : ""}</div>`).join("")}</div>` : ""}
+    ${canAdd ? `<form data-form="result" data-uid="${esc(u)}" data-tid="${esc(t.id)}"><h3 style="font-size:1.05rem;margin-top:16px">Neuer Wert</h3>
+      <div class="two">${t.sides ? `<label class="f"><span>Links (${esc(t.unit)})</span><input type="text" inputmode="decimal" name="l"></label><label class="f"><span>Rechts (${esc(t.unit)})</span><input type="text" inputmode="decimal" name="r"></label>`
+        : `<label class="f"><span>Wert (${esc(t.unit)})</span><input type="text" inputmode="decimal" name="v" required></label>`}
+      <label class="f"><span>Datum</span><input type="date" name="date" value="${todayIso()}" required></label></div>
+      <label class="f"><span>Bemerkung</span><input type="text" name="note" maxlength="200"></label>
+      <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Schließen</button><button class="btn">Speichern</button></div></form>`
+      : `<div class="btns"><button class="btn ghost block" data-act="closeSheet">Schließen</button></div>`}`);
+}
+function athleteSheet(u) {
+  const p = person(u), info = infoOf(u), a = attendanceStats(u, S.stats.sessions || [], S.stats.att || []), inj = injuriesOf(u);
+  const reasons = Object.entries(a.reasons).map(([k, v]) => `${esc(REASONS[k] || k)} ${v}`).join(", ");
+  const myComps = S.comps.filter(c => c.user_id === u).sort((x, y) => y.comp_date.localeCompare(x.comp_date)).slice(0, 8);
+  sheet(`<h3>${esc(p.display_name)}</h3><p class="small muted">${esc(groupName(p.plan_group_id) || "keine Trainingsgruppe")}${S.emails[u] ? " · " + esc(S.emails[u]) : ""}</p>
+    <div class="card"><div class="small muted" style="margin-bottom:6px">Trainingsbeteiligung (${esc(STAT_RANGES[S.statRange][0])})</div>
+      <div class="stats"><div class="stat"><b>${a.rate == null ? "–" : a.rate + " %"}</b><span>${a.attended}/${a.counted} Trainings</span></div>
+      <div class="stat"><b>${a.no}</b><span>abgesagt</span></div><div class="stat"><b>${a.open}</b><span>keine Antwort</span></div></div>
+      <p class="small" style="margin:10px 0 0">${[reasons && "Gründe: " + reasons, a.late && a.late + "× zu spät", a.noShow && a.noShow + "× nicht erschienen", a.flipped && a.flipped + "× erst zu-, dann abgesagt", a.excluded && a.excluded + " Trainings wegen Verletzung nicht gezählt"].filter(Boolean).join(" · ") || "Keine Auffälligkeiten."}</p></div>
+    <form data-form="ainfo" data-uid="${esc(u)}" class="card"><div class="small muted" style="margin-bottom:6px">Für die Normen</div>
+      <div class="seg" role="radiogroup">${[["m", "Jungs"], ["w", "Mädels"], ["", "offen"]].map(([v, l]) => `<label class="segopt"><input type="radio" name="sex" value="${v}" ${(info.sex || "") === v ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
+      <div class="small muted" style="margin:10px 0 4px">Weitere Trainingsgruppen, deren Normen gelten</div>
+      <div class="checks">${S.groups.filter(g => g.id !== p.plan_group_id).map(g => `<label><input type="checkbox" name="g" value="${esc(g.id)}" ${(info.norm_group_ids || []).includes(g.id) ? "checked" : ""}> ${esc(g.name)}</label>`).join("") || '<span class="small muted">–</span>'}</div>
+      <div class="btns"><button class="btn sm ghost">Speichern</button></div></form>
+    <div class="card"><div class="small muted" style="margin-bottom:6px">Verletzungen / Pausen</div>
+      ${inj.map(i => `<div class="injrow"><span class="grow"><b>${dm(i.start_date)} – ${i.end_date ? dm(i.end_date) : "heute"}</b>${!i.end_date ? ' <span class="chip off">aktuell</span>' : ""}<span class="small muted" style="display:block">${esc(i.note || "")}${[i.exclude_attendance && "Training", i.exclude_tests && "Tests"].filter(Boolean).length ? " · befreit von: " + [i.exclude_attendance && "Training", i.exclude_tests && "Tests"].filter(Boolean).join(", ") : ""}</span></span>
+        ${!i.end_date ? `<button class="btn sm ghost" data-act="injEnd" data-id="${esc(i.id)}" data-uid="${esc(u)}">Wieder fit</button>` : ""}<button class="iconbtn" data-act="injDelete" data-id="${esc(i.id)}" data-uid="${esc(u)}" aria-label="Löschen">${ICON.trash}</button></div>`).join("") || `<p class="small muted">Keine.</p>`}
+      <form data-form="injury" data-uid="${esc(u)}" class="injform"><div class="two"><label class="f"><span>Verletzt seit</span><input type="date" name="start" value="${todayIso()}" required></label>
+        <label class="f"><span>Bis (optional)</span><input type="date" name="end"></label></div>
+        <label class="f"><span>Bemerkung</span><input type="text" name="note" maxlength="300" placeholder="z. B. Muskelfaserriss, Reha"></label>
+        <div class="checks"><label><input type="checkbox" name="att" checked> zählt nicht in die Trainingsbeteiligung</label><label><input type="checkbox" name="tests" checked> fehlende Tests nicht anrechnen</label></div>
+        <div class="btns"><button class="btn sm ghost">Verletzung eintragen</button></div></form></div>
+    <div class="card flush"><div class="subhead">Tests</div>${testRows(u)}</div>
+    ${myComps.length ? `<div class="card flush"><div class="subhead">Wettkämpfe</div>${myComps.map(c => `<div class="row"><span class="grow"><span class="name">${esc(c.discipline)} · ${esc(c.result)}</span><span class="meta">${esc(c.comp_name)} · ${fmtDay(c.comp_date)}</span></span></div>`).join("")}</div>` : ""}
+    <div class="btns"><button class="btn ghost block" data-act="closeSheet">Schließen</button></div>`);
+}
+function testTypeSheet(id) {
+  const t = id ? testById(id) : { name: "", unit: "", category: "sprint", better: "lower", sides: false, entry: "staff", note: "", active: true, sort_order: 0 };
+  const ns = id ? S.norms.filter(n => n.test_id === id) : [];
+  const opt = (name, cur, list) => `<select name="${name}">${list.map(([v, l]) => `<option value="${v}" ${String(cur) === String(v) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  sheet(`<h3>${id ? esc(t.name) : "Neuer Test"}</h3>
+    <form data-form="testType" data-id="${esc(id || "")}">
+      <div class="two"><label class="f"><span>Name</span><input type="text" name="name" required maxlength="60" value="${esc(t.name)}"></label>
+      <label class="f"><span>Einheit</span><input type="text" name="unit" maxlength="12" value="${esc(t.unit)}" placeholder="s, m, kg"></label></div>
+      <div class="two"><label class="f"><span>Bereich</span>${opt("category", t.category, Object.entries(CAT_LABEL))}</label>
+      <label class="f"><span>Besser ist</span>${opt("better", t.better, [["lower", "weniger (Zeit)"], ["higher", "mehr (Weite, kg)"]])}</label></div>
+      <div class="two"><label class="f"><span>Wer trägt ein</span>${opt("entry", t.entry, [["staff", "nur Trainer"], ["self", "Athlet selbst"]])}</label>
+      <label class="f"><span>Links/rechts getrennt</span>${opt("sides", t.sides, [["false", "nein"], ["true", "ja"]])}</label></div>
+      <label class="f"><span>Hinweis</span><input type="text" name="note" maxlength="200" value="${esc(t.note)}"></label>
+      <label class="opt"><input type="checkbox" name="active" ${t.active ? "checked" : ""}><span><b>Aktiv</b><span class="small muted">Inaktive Tests bleiben mit ihren Werten erhalten, erscheinen aber nicht mehr.</span></span></label>
+      <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>
+    ${id ? `<h3 style="font-size:1.05rem;margin-top:18px">Normen</h3>
+      <div class="card flush">${ns.map(n => `<div class="row"><span class="grow"><span class="name">${n.sex === "m" ? "Jungs" : "Mädels"} · ${esc(fmtVal(n.value, t.unit))}</span><span class="meta">${n.group_id ? "nur " + esc(groupName(n.group_id) || "?") : "alle Trainingsgruppen"}</span></span>
+        <button class="iconbtn" data-act="normDelete" data-id="${esc(n.id)}" data-tid="${esc(id)}" aria-label="Norm löschen">${ICON.trash}</button></div>`).join("") || `<div class="row muted small">Noch keine Norm.</div>`}</div>
+      <form data-form="norm" data-tid="${esc(id)}"><div class="normform">
+        <select name="sex" aria-label="Geschlecht"><option value="m">Jungs</option><option value="w">Mädels</option></select>
+        <select name="group" aria-label="Trainingsgruppe"><option value="">alle Gruppen</option>${S.groups.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join("")}</select>
+        <input type="text" inputmode="decimal" name="value" required placeholder="${esc(t.unit || "Wert")}" aria-label="Normwert"><button class="btn sm">+ Norm</button></div>
+        <div class="hint">Gibt es für dieselbe Gruppe schon eine Norm, wird sie ersetzt.</div></form>
+      <div class="btns"><button class="btn danger block" data-act="testTypeDelete" data-id="${esc(id)}">Test löschen</button></div>` : ""}`);
+}
+function compSheet(id) {
+  const c = id ? S.comps.find(x => x.id === id) : { user_id: S.me.id, comp_date: todayIso(), comp_name: "", discipline: "", result: "", place: "", wind: "", note: "", entry_id: null };
+  const wk = S.calendar.filter(e => e.kind === "wettkampf").sort((a, b) => b.start_date.localeCompare(a.start_date));
+  const athletes = S.profiles.filter(p => p.approved).sort(byName);
+  sheet(`<h3>${id ? "Ergebnis bearbeiten" : "Wettkampfergebnis"}</h3>
+    <form data-form="comp" data-id="${esc(id || "")}">
+      ${isStaff() ? `<label class="f"><span>Athlet</span><select name="user">${athletes.map(p => `<option value="${esc(p.id)}" ${p.id === c.user_id ? "selected" : ""}>${esc(p.display_name)}</option>`).join("")}</select></label>` : ""}
+      ${wk.length ? `<label class="f"><span>Wettkampf aus dem Kalender</span><select name="entry" data-change="compEntry"><option value="">– anderer Wettkampf –</option>${wk.map(e => `<option value="${esc(e.id)}" data-name="${esc(e.title)}" data-date="${esc(e.start_date)}" ${e.id === c.entry_id ? "selected" : ""}>${esc(e.title)} (${dm(e.start_date)})</option>`).join("")}</select></label>` : ""}
+      <div class="two"><label class="f"><span>Wettkampf</span><input type="text" name="name" required maxlength="120" value="${esc(c.comp_name)}"></label>
+      <label class="f"><span>Datum</span><input type="date" name="date" required value="${esc(c.comp_date)}"></label></div>
+      <div class="two"><label class="f"><span>Disziplin</span><input type="text" name="disc" required maxlength="60" list="discs" value="${esc(c.discipline)}"><datalist id="discs">${DISCIPLINES.map(d => `<option value="${d}">`).join("")}</datalist></label>
+      <label class="f"><span>Leistung</span><input type="text" name="result" required maxlength="30" value="${esc(c.result)}" placeholder="10,85 · 1:52,30 · 6,45"></label></div>
+      <div class="two"><label class="f"><span>Platz</span><input type="text" name="place" maxlength="20" value="${esc(c.place)}"></label>
+      <label class="f"><span>Wind</span><input type="text" name="wind" maxlength="10" value="${esc(c.wind)}" placeholder="+1,2"></label></div>
+      <label class="f"><span>Bemerkung</span><input type="text" name="note" maxlength="300" value="${esc(c.note)}"></label>
+      <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>
+    ${id ? `<div class="btns"><button class="btn danger block" data-act="compDelete" data-id="${esc(id)}">Ergebnis löschen</button></div>` : ""}`);
+}
+function calSheet(id) {
+  const e = id ? S.calendar.find(x => x.id === id) : { kind: "wettkampf", title: "", start_date: todayIso(), end_date: null, location: "", note: "" };
+  if (id && !isStaff()) {
+    const res = S.comps.filter(c => c.entry_id === id);
+    sheet(`<h3>${esc(e.title)}</h3><p class="small muted">${KIND_LABEL[e.kind]} · ${fmtLong(e.start_date)}${e.end_date && e.end_date !== e.start_date ? " – " + fmtLong(e.end_date) : ""}${e.location ? " · " + esc(e.location) : ""}</p>
+      ${e.note ? `<p class="pre">${esc(e.note)}</p>` : ""}
+      ${res.length ? `<div class="card flush">${res.map(c => `<div class="row"><span class="grow"><span class="name">${esc((person(c.user_id) || {}).display_name || "?")}</span><span class="meta">${esc(c.discipline)}</span></span><span class="val">${esc(c.result)}</span></div>`).join("")}</div>` : ""}
+      <div class="btns">${e.kind === "wettkampf" ? `<button class="btn" data-act="compNewFor" data-id="${esc(id)}">Mein Ergebnis eintragen</button>` : ""}<button class="btn ghost" data-act="closeSheet">Schließen</button></div>`);
+    return;
+  }
+  sheet(`<h3>${id ? "Eintrag bearbeiten" : "Neuer Eintrag"}</h3>
+    <form data-form="cal" data-id="${esc(id || "")}">
+      <label class="f"><span>Art</span><select name="kind">${Object.entries(KIND_LABEL).map(([k, l]) => `<option value="${k}" ${e.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <div class="hint">Phasen (z. B. Allgemeine Vorbereitung, Hallensaison) erscheinen als Balken in der Periodisierung.</div></label>
+      <label class="f"><span>Titel</span><input type="text" name="title" required maxlength="120" value="${esc(e.title)}"></label>
+      <div class="two"><label class="f"><span>Von</span><input type="date" name="start" required value="${esc(e.start_date)}"></label>
+      <label class="f"><span>Bis (optional)</span><input type="date" name="end" value="${esc(e.end_date || "")}"></label></div>
+      <label class="f"><span>Ort</span><input type="text" name="location" maxlength="120" value="${esc(e.location)}"></label>
+      <label class="f"><span>Notiz</span><input type="text" name="note" maxlength="500" value="${esc(e.note)}"></label>
+      <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>
+    ${id ? `<div class="btns"><button class="btn danger block" data-act="calDelete" data-id="${esc(id)}">Eintrag löschen</button></div>` : ""}`);
+}
+async function reloadPerf() {
+  const [tests, norms, results, ainfo, injuries, calendar, comps] = await Promise.all(["test_types", "norms", "test_results", "athlete_info", "injuries", "calendar_entries", "competition_results"].map(t => S.be.list(t)));
+  Object.assign(S, { tests, norms, results, ainfo, injuries, calendar, comps });
+}
+
+const perfActions = {
+  perfView(el) { S.perfView = el.dataset.v; render(); },
+  statRange(el) { S.statRange = el.dataset.v; S.stats.loaded = false; render(); },
+  statSort(el) { S.statSort = el.dataset.v; render(); },
+  testOpen(el) { testSheet(el.dataset.uid, el.dataset.tid); },
+  athleteOpen(el) { athleteSheet(el.dataset.id); },
+  async resultDelete(el) {
+    if (!await ask("Wert löschen?", "Der Messwert wird gelöscht.", "Löschen", true)) return;
+    const r = S.results.find(x => x.id === el.dataset.id);
+    await quiet(busy(null, async () => { await S.be.removeRow("test_results", r.id); await reloadPerf(); render(); testSheet(r.user_id, r.test_id); }));
+  },
+  async injEnd(el) {
+    await quiet(busy(null, async () => { const inj = S.injuries.find(i => i.id === el.dataset.id), y = addDays(todayIso(), -1);
+      await S.be.saveRow("injuries", { id: el.dataset.id, end_date: y < inj.start_date ? inj.start_date : y }); await reloadPerf(); render(); athleteSheet(el.dataset.uid); toast("Als wieder fit eingetragen"); }));
+  },
+  async injDelete(el) {
+    if (!await ask("Eintrag löschen?", "Die Verletzung wird aus dem Verlauf gelöscht.", "Löschen", true)) return athleteSheet(el.dataset.uid);
+    await quiet(busy(null, async () => { await S.be.removeRow("injuries", el.dataset.id); await reloadPerf(); render(); athleteSheet(el.dataset.uid); }));
+  },
+  testTypeNew() { testTypeSheet(null); },
+  testTypeOpen(el) { testTypeSheet(el.dataset.id); },
+  async testTypeDelete(el) {
+    const t = testById(el.dataset.id), n = S.results.filter(r => r.test_id === t.id).length;
+    if (!await ask("Test löschen?", `„${esc(t.name)}“ und ${n} gespeicherte Werte werden gelöscht. Wenn der Test nur nicht mehr gemacht wird, nimm lieber den Haken bei „Aktiv“ raus.`, "Löschen", true)) return testTypeSheet(t.id);
+    await quiet(busy(null, async () => { await S.be.removeRow("test_types", t.id); await reloadPerf(); closeSheet(); render(); toast("Test gelöscht"); }));
+  },
+  async normDelete(el) {
+    await quiet(busy(null, async () => { await S.be.removeRow("norms", el.dataset.id); await reloadPerf(); render(); testTypeSheet(el.dataset.tid); }));
+  },
+  compNew() { compSheet(null); },
+  compNewFor(el) { compSheet(null); const sel = document.querySelector('#dlg select[name=entry]'); if (sel) { sel.value = el.dataset.id; changes.compEntry(sel); } },
+  compEdit(el) { compSheet(el.dataset.id); },
+  async compDelete(el) {
+    if (!await ask("Ergebnis löschen?", "Das Wettkampfergebnis wird gelöscht.", "Löschen", true)) return compSheet(el.dataset.id);
+    await quiet(busy(null, async () => { await S.be.removeRow("competition_results", el.dataset.id); await reloadPerf(); closeSheet(); render(); }));
+  },
+  termView(el) { S.termView = el.dataset.v; render(); },
+  calNew() { calSheet(null); },
+  calOpen(el) { calSheet(el.dataset.id); },
+  async calDelete(el) {
+    if (!await ask("Eintrag löschen?", "Der Kalendereintrag wird gelöscht. Eingetragene Wettkampfergebnisse bleiben erhalten.", "Löschen", true)) return calSheet(el.dataset.id);
+    await quiet(busy(null, async () => { await S.be.removeRow("calendar_entries", el.dataset.id); await reloadPerf(); closeSheet(); render(); }));
+  },
+  showPastCal() { S.showPastCal = true; render(); },
+  moreView(el) { S.moreView = el.dataset.v; render(); },
+  memberPerf(el) { closeSheet(); S.tab = "leistung"; S.perfView = "overview"; render(); loadStats().then(() => athleteSheet(el.dataset.id)).catch(e => toast(deErr(e), "error")); }
+};
+const perfChanges = {
+  enterTest(el) { S.enterTest = el.value; render(); },
+  enterDate(el) { S.enterDate = el.value || todayIso(); render(); },
+  compEntry(el) {
+    const o = el.selectedOptions[0], f = el.form; if (!o || !o.value) return;
+    f.name.value = o.dataset.name; f.date.value = o.dataset.date;
+  }
+};
+const perfForms = {
+  async result(f) {
+    const t = testById(f.dataset.tid), row = { user_id: f.dataset.uid, test_id: t.id, test_date: f.date.value, note: f.note.value.trim() };
+    if (t.sides) { row.value_left = parseVal(f.l.value); row.value_right = parseVal(f.r.value); if (row.value_left == null && row.value_right == null) return toast("Bitte mindestens ein Bein eintragen.", "error"); }
+    else { row.value = parseVal(f.v.value); if (row.value == null) return toast("Bitte eine Zahl eintragen, z. B. 3,45.", "error"); }
+    await S.be.saveRow("test_results", row); await reloadPerf(); render(); testSheet(row.user_id, t.id); toast("Gespeichert");
+  },
+  async bulkResults(f) {
+    const t = testById(f.dataset.tid), date = f.dataset.date; let n = 0, bad = [];
+    for (const p of S.profiles.filter(x => x.approved && x.role === "athlete")) {
+      const ex = S.results.find(r => r.user_id === p.id && r.test_id === t.id && r.test_date === date);
+      const row = { user_id: p.id, test_id: t.id, test_date: date };
+      if (t.sides) {
+        const l = f["l_" + p.id].value.trim(), r = f["r_" + p.id].value.trim();
+        if (!l && !r) continue;
+        row.value_left = parseVal(l); row.value_right = parseVal(r);
+        if ((l && row.value_left == null) || (r && row.value_right == null)) { bad.push(p.display_name); continue; }
+        if (ex && ex.value_left === row.value_left && ex.value_right === row.value_right) continue;
+      } else {
+        const v = f["v_" + p.id].value.trim(); if (!v) continue;
+        row.value = parseVal(v); if (row.value == null) { bad.push(p.display_name); continue; }
+        if (ex && Number(ex.value) === row.value) continue;
+      }
+      if (ex) row.id = ex.id;
+      await S.be.saveRow("test_results", row); n++;
+    }
+    await reloadPerf(); S.stats.loaded = false; render();
+    toast(bad.length ? `${n} gespeichert. Nicht lesbar: ${bad.join(", ")}` : `${n} Werte gespeichert`, bad.length ? "error" : undefined);
+  },
+  async ainfo(f) {
+    const u = f.dataset.uid, sex = (f.querySelector("[name=sex]:checked") || {}).value || null;
+    const ids = [...f.querySelectorAll("[name=g]:checked")].map(x => x.value);
+    await S.be.saveRow("athlete_info", { user_id: u, sex, norm_group_ids: ids, updated_at: new Date().toISOString() });
+    await reloadPerf(); render(); athleteSheet(u); toast("Gespeichert");
+  },
+  async injury(f) {
+    const u = f.dataset.uid;
+    if (f.end.value && f.end.value < f.start.value) return toast("Das Ende liegt vor dem Beginn.", "error");
+    await S.be.saveRow("injuries", { user_id: u, start_date: f.start.value, end_date: f.end.value || null, note: f.note.value.trim(), exclude_attendance: f.att.checked, exclude_tests: f.tests.checked });
+    await reloadPerf(); render(); athleteSheet(u); toast("Verletzung eingetragen");
+  },
+  async testType(f) {
+    const row = { name: f.name.value.trim(), unit: f.unit.value.trim(), category: f.category.value, better: f.better.value, entry: f.entry.value, sides: f.sides.value === "true", note: f.note.value.trim(), active: f.active.checked };
+    if (f.dataset.id) row.id = f.dataset.id; else row.sort_order = Math.max(0, ...S.tests.map(t => t.sort_order || 0)) + 1;
+    const saved = await S.be.saveRow("test_types", row); await reloadPerf(); render(); testTypeSheet(saved.id); toast("Gespeichert");
+  },
+  async norm(f) {
+    const tid = f.dataset.tid, value = parseVal(f.value.value), sex = f.sex.value, group_id = f.group.value || null;
+    if (value == null) return toast("Bitte einen Normwert eintragen.", "error");
+    const ex = S.norms.find(n => n.test_id === tid && n.sex === sex && (n.group_id || null) === group_id);
+    await S.be.saveRow("norms", ex ? { id: ex.id, value } : { test_id: tid, sex, group_id, value });
+    await reloadPerf(); render(); testTypeSheet(tid); toast("Norm gespeichert");
+  },
+  async comp(f) {
+    const disc = f.disc.value.trim(), result = f.result.value.trim();
+    const row = { user_id: f.user ? f.user.value : S.me.id, entry_id: f.entry ? (f.entry.value || null) : null, comp_name: f.name.value.trim(), comp_date: f.date.value, discipline: disc,
+      result, value: parseVal(result), better: betterFor(disc), place: f.place.value.trim(), wind: f.wind.value.trim(), note: f.note.value.trim() };
+    if (f.dataset.id) row.id = f.dataset.id;
+    await S.be.saveRow("competition_results", row); await reloadPerf(); closeSheet(); render(); toast("Ergebnis gespeichert");
+  },
+  async cal(f) {
+    if (f.end.value && f.end.value < f.start.value) return toast("Das Ende liegt vor dem Beginn.", "error");
+    const row = { kind: f.kind.value, title: f.title.value.trim(), start_date: f.start.value, end_date: f.end.value || null, location: f.location.value.trim(), note: f.note.value.trim() };
+    if (f.dataset.id) row.id = f.dataset.id;
+    await S.be.saveRow("calendar_entries", row); await reloadPerf(); closeSheet(); render(); toast("Gespeichert");
+  }
+};
+
 /* ───────────── Dialoge ───────────── */
 const dlg = $("#dlg");
 function sheet(html) { $("#dlg-body").innerHTML = html; if (!dlg.open) dlg.showModal(); }
@@ -891,6 +1519,7 @@ function memberSheet(id) {
       ${staffEdit && !self ? `<label class="opt"><input type="checkbox" name="approved" ${p.approved ? "checked" : ""}><span><b>Zugang aktiv</b><span class="small muted">Ohne Haken kann sich die Person zwar anmelden, sieht aber nichts.</span></span></label>` : ""}
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div>
     </form>
+    ${isStaff() && p.role === "athlete" && p.approved ? `<div class="btns"><button class="btn ghost block" data-act="memberPerf" data-id="${esc(p.id)}">Leistung, Verletzungen &amp; Trainingsbeteiligung</button></div>` : ""}
     ${canDelete ? `<div class="btns"><button class="btn danger block" data-act="deleteMember" data-id="${esc(p.id)}">Konto löschen</button></div>` : ""}`);
 }
 
@@ -914,8 +1543,9 @@ function sessionSheet(sid) {
     const a = attOf(s.id, p.id), pr = privOf(s.id, p.id);
     const mark = a && a.coach_mark ? `<span class="chip ${a.coach_mark === "no_show" ? "off" : ""}">${a.coach_mark === "late" ? "zu spät" : "nicht erschienen"}</span>` : "";
     const flip = staff && flipped(s.id, p.id) ? `<span class="chip" title="Erst zugesagt, dann abgesagt">${ICON.flip} umentschieden</span>` : "";
+    const injChip = staff && injuredOn(p.id, s.session_date, null) ? `<span class="chip off">verletzt</span>` : "";
     const reason = staff && pr ? `<span class="meta">${esc(REASONS[pr.reason] || pr.reason)}${pr.note ? " – " + esc(pr.note) : ""}</span>` : "";
-    const inner = `<span class="avatar ${p.role}">${esc(initials(p.display_name))}</span><span class="grow"><span class="name">${esc(p.display_name)}</span>${reason}</span>${flip}${mark}`;
+    const inner = `<span class="avatar ${p.role}">${esc(initials(p.display_name))}</span><span class="grow"><span class="name">${esc(p.display_name)}</span>${reason}</span>${injChip}${flip}${mark}`;
     return staff ? `<button class="row" data-act="attPerson" data-sid="${esc(s.id)}" data-uid="${esc(p.id)}">${inner}<span class="chev">${ICON.chev}</span></button>` : `<div class="row">${inner}</div>`;
   };
   const block = (title, list) => `<div class="subhead">${title} · ${list.length}</div>${list.map(line).join("") || `<div class="row muted small">–</div>`}`;
@@ -1178,7 +1808,8 @@ const actions = {
     download(`meine-daten_${stamp()}.json`, {
       app: APP_ID, exported_at: new Date().toISOString(), email: S.user.email || null,
       profile: { display_name: S.me.display_name, role: S.me.role, approved: S.me.approved, trainingsgruppe: groupName(S.me.plan_group_id) || null, created_at: S.me.created_at },
-      zu_und_absagen: mine, uebungen_von_mir: S.exercises.filter(e => e.created_by === S.me.id), geraete_einstellungen: prefs
+      zu_und_absagen: mine, testwerte: S.results.filter(r => r.user_id === S.me.id), wettkaempfe: S.comps.filter(c => c.user_id === S.me.id),
+      verletzungen: S.injuries.filter(i => i.user_id === S.me.id), normangaben: infoOf(S.me.id), uebungen_von_mir: S.exercises.filter(e => e.created_by === S.me.id), geraete_einstellungen: prefs
     });
   },
   async update() {
@@ -1198,6 +1829,11 @@ const actions = {
     LS.del("la_conn"); S.be = null; S.user = null; S.me = null; boot();
   }
 };
+
+Object.assign(actions, perfActions, {
+  goTeam() { S.tab = "settings"; S.moreView = "team"; LS.set("la_tab", S.tab); render(); scrollTo(0, 0); },
+  goSeason() { S.tab = "termine"; S.termView = "season"; LS.set("la_tab", S.tab); render(); scrollTo(0, 0); }
+});
 
 const changes = {
   async demoUser(el) { S.be.switchUser(el.value); closeSheet(); await boot(); },
@@ -1227,6 +1863,7 @@ const changes = {
     await quiet(busy(null, () => restoreBackup(data)));
   }
 };
+Object.assign(changes, perfChanges);
 const inputs = {
   exSearch(el) {
     S.exSearch = el.value; const pos = el.selectionStart;
@@ -1261,6 +1898,13 @@ async function restoreBackup(data) {
     await S.be.upsert("attendance", (tables.attendance || []).filter(keepUser));
     await S.be.upsert("attendance_private", (tables.attendance_private || []).filter(keepUser));
     await S.be.upsert("attendance_log", (tables.attendance_log || []).filter(keepUser).map(l => fixRef(l, "changed_by")));
+    await S.be.upsert("test_types", tables.test_types || []);
+    await S.be.upsert("norms", (tables.norms || []).map(n => Object.assign({}, n, { group_id: mapG(n.group_id) })).filter(n => !n.group_id || Object.values(idMap).includes(n.group_id)));
+    await S.be.upsert("athlete_info", (tables.athlete_info || []).filter(keepUser).map(i => Object.assign({}, i, { norm_group_ids: (i.norm_group_ids || []).map(mapG).filter(Boolean) })));
+    await S.be.upsert("injuries", (tables.injuries || []).filter(keepUser).map(i => fixRef(i, "created_by")));
+    await S.be.upsert("test_results", (tables.test_results || []).filter(keepUser).map(r => fixRef(r, "entered_by")));
+    await S.be.upsert("calendar_entries", (tables.calendar_entries || []).map(c => fixRef(c, "created_by")));
+    await S.be.upsert("competition_results", (tables.competition_results || []).filter(keepUser).map(c => fixRef(c, "entered_by")));
   }
   const rows = data.profiles.slice().sort((a, b) => (b.role === "admin") - (a.role === "admin"));
   for (const p of rows) {
@@ -1384,6 +2028,8 @@ const forms = {
     toast(`Plan gespeichert${added ? `, ${added} Übungen übernommen` : ""}`);
   }
 };
+
+Object.assign(forms, perfForms);
 
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]");

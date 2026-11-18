@@ -10,6 +10,9 @@ App für die Leichtathletik-Trainingsgruppe des Leichtathletik-Teams DSHS Köln.
 - Wochenplan-Import aus Excel (.xlsx) mit Archiv; jeder sieht zuerst das Blatt seiner Trainingsgruppe
 - Übungssammlung mit Abkürzungen, Beschreibungen und Kurzvideos
 - Termine mit Zu- und Absagen; Absagegrund und Verlauf nur für Trainer und Admins
+- Testwochen mit Verlauf, Gruppennormen je Geschlecht und Trainingsgruppe, Verletzungsstatus
+- Statistik für Trainer: Trainingsbeteiligung und Normabgleich pro Athlet
+- Wettkampfergebnisse mit Bestleistungen und Saisonkalender mit Periodisierung
 - Hell/Dunkel, Schriftgröße, Backup und Wiederherstellung
 
 ## Dateien
