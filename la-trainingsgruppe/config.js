@@ -3,6 +3,6 @@
 // Die Daten schützen die Regeln aus supabase/01_grundlage.sql, nicht dieser Schlüssel.
 // NIEMALS den "service_role"/"secret" Schlüssel hier eintragen.
 window.LA_CONFIG = {
-  supabaseUrl: "",
-  supabaseKey: ""
+  supabaseUrl: "https://mhhjqfkpdytivpmpulqn.supabase.co",
+  supabaseKey: "sb_publishable_qFUVivOqJn5KKud4TpJnaw_Vze41Lz7"
 };
