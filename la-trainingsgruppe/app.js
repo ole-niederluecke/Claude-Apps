@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "18.11.2026 · 7";
+const VERSION = "18.11.2026 · 8";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -894,7 +894,7 @@ function viewTermine() {
 function viewTraining() {
   const mon = mondayOf(todayIso()), t = todayIso();
   const upcoming = S.sessions.filter(s => s.session_date >= t);
-  const past = S.sessions.filter(s => s.session_date < t).reverse();
+  const past = S.sessions.filter(s => s.session_date < t && s.session_date >= addDays(t, -14)).reverse(); // ältere nur noch in der Statistik
   const byWeek = {};
   upcoming.forEach(s => (byWeek[mondayOf(s.session_date)] = byWeek[mondayOf(s.session_date)] || []).push(s));
   let html = isStaff() ? `<div class="btns" style="margin:0 0 6px"><button class="btn ghost" data-act="sessNew">+ Termin</button></div>` : "";
@@ -908,9 +908,9 @@ function viewTraining() {
   });
   if (past.length) {
     html += `<h2>Vergangene Termine</h2>`;
-    html += S.showPast ? past.map(s => sessionCard(s)).join("") : `<button class="btn ghost block" data-act="showPast">${past.length} vergangene Termine anzeigen</button>`;
+    html += S.showPast ? past.map(s => sessionCard(s)).join("") : `<button class="btn ghost block" data-act="showPast">${past.length} Termine der letzten 2 Wochen anzeigen</button>`;
   }
-  if (!isStaff()) html += `<p class="small muted" style="margin:10px 4px">Absagegründe sehen nur Trainer und Admins. Alle sehen, wer zugesagt hat.</p>`;
+  html += `<p class="small muted" style="margin:10px 4px">${isStaff() ? "Ältere Termine werden ausgeblendet und zählen nur noch in der Statistik (Leistung → Übersicht)." : "Absagegründe sehen nur Trainer und Admins. Alle sehen, wer zugesagt hat."}</p>`;
   return html;
 }
 
