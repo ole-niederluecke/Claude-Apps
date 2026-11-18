@@ -9,9 +9,11 @@ Ohne Einrichtung lässt sich alles im **Demo-Modus** ausprobieren. Der läuft nu
 2. **New project**: Name z. B. `trainingsgruppe`, Region **Central EU (Frankfurt)**, ein sicheres Datenbank-Passwort vergeben und gut aufheben.
 
 ## 2. Datenbank einrichten
-1. Links **SQL Editor** öffnen und **New query** wählen.
-2. Den kompletten Inhalt von [`supabase/01_grundlage.sql`](supabase/01_grundlage.sql) einfügen und auf **Run** klicken.
-   Damit entstehen die Tabellen, Rollen und Rechte-Regeln. Das Skript darf auch mehrfach laufen.
+Links **SQL Editor** öffnen und **New query** wählen. Dort nacheinander ausführen:
+1. Den kompletten Inhalt von [`supabase/01_grundlage.sql`](supabase/01_grundlage.sql) einfügen und auf **Run** klicken. Das legt Konten, Rollen und Rechte an.
+2. Danach in einer neuen Abfrage [`supabase/02_plan_termine.sql`](supabase/02_plan_termine.sql) einfügen und auf **Run** klicken. Das legt Wochenpläne, Übungssammlung, Termine, Zu-/Absagen und den Speicher für Übungsvideos an.
+
+Beide Skripte dürfen auch mehrfach laufen. Kommen später neue Teile dazu (`03_…`), werden sie genauso ausgeführt.
 
 ## 3. Anmeldung einstellen
 Unter **Authentication**:
@@ -40,6 +42,14 @@ Beide Werte in [`config.js`](config.js) eintragen (oder Claude schicken, dann tr
 | | Athlet | Trainer | Admin |
 |---|:-:|:-:|:-:|
 | Eigenes Profil, Darstellung, Passwort | ✓ | ✓ | ✓ |
+| Wochenplan ansehen (je nach Einstellung alle Blätter oder nur das eigene) | ✓ | ✓ | ✓ |
+| Zu- und Absagen für sich selbst | ✓ | ✓ | ✓ |
+| Sehen, wer zu- oder abgesagt hat | ✓ | ✓ | ✓ |
+| Übungen anlegen, eigene bearbeiten | ✓ | ✓ | ✓ |
+| Absagegründe und Verlauf (wer hat sich umentschieden) sehen | | ✓ | ✓ |
+| „Zu spät“ / „nicht erschienen“ markieren, für andere zu-/absagen | | ✓ | ✓ |
+| Wochenplan hochladen, Termine anlegen/absagen, feste Trainingstage | | ✓ | ✓ |
+| Alle Übungen bearbeiten und löschen | | ✓ | ✓ |
 | Freigeschaltete Mitglieder sehen | ✓ | ✓ | ✓ |
 | E-Mail-Adressen sehen | | ✓ | ✓ |
 | Konten freischalten / sperren, neue ablehnen | | ✓ | ✓ |
@@ -51,7 +61,15 @@ Beide Werte in [`config.js`](config.js) eintragen (oder Claude schicken, dann tr
 
 Die Rechte werden in der Datenbank selbst geprüft, nicht nur in der App. Wer also nicht berechtigt ist, kann auch mit technischen Tricks nichts ändern. Es muss außerdem immer mindestens einen Admin geben.
 
+## Wochenplan hochladen
+- In Excel als `.xlsx` speichern, in Numbers über **Ablage → Exportieren → Excel**.
+- In der App unter **Plan → Neuen Plan hochladen** die Datei wählen, die Woche festlegen und jedem Blatt eine Trainingsgruppe zuordnen. Für neue Blätter (z. B. Alternativpläne) kann direkt eine neue Gruppe angelegt werden.
+- Erkannt wird jedes Blatt mit einer Zeile „Montag … Sonntag“. Darunter stehen pro Tag Ort und Uhrzeit, das Tagesthema und die Übungen, jeweils mit der Belastung in der Zeile darunter.
+- Ein Blatt „Abkürzungen“ wird in die Übungssammlung übernommen. Weitere Blätter (Übungen, Turnhalle …) erscheinen unter dem Plan.
+- Ein Plan gilt ab seiner Woche, bis ein neuerer hochgeladen wird. Ältere Pläne stehen im **Archiv**.
+
 ## Gut zu wissen
+- **Videos:** Kurzvideos zu Übungen bis 50 MB. Die kostenlose Supabase-Stufe hat 1 GB Speicher, das reicht für einige Dutzend kurze Clips. Alternativ geht ein Link zu YouTube oder Instagram. Videos sind nicht im Backup enthalten.
 - **Pausierung:** Kostenlose Supabase-Projekte pausieren nach etwa 7 Tagen ohne Nutzung (z. B. in den Ferien). Dann im Supabase-Dashboard auf **Restore** klicken. Daten gehen dabei nicht verloren.
 - **Backups:** Die kostenlose Supabase-Stufe macht keine automatischen Backups. Lade deshalb regelmäßig unter **Einstellungen → Admin → Backup herunterladen** eine Sicherung herunter.
 - **Updates:** Unter **Einstellungen → Version → Aktualisieren** lädt die App die neueste Version.
