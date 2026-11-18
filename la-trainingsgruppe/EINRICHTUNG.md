@@ -11,6 +11,7 @@ Im Supabase-Projekt links **SQL Editor → New query** öffnen. Die Dateien aus 
 4. `04_anmeldung.sql`
 5. `05_feedback.sql`
 6. `06_planzuordnung_statistik.sql`
+7. `07_wettkampfmeldung.sql`
 
 Alle Skripte dürfen auch mehrfach laufen. Kommt mit einem Update eine neue Datei dazu, wird sie **vor** dem Mergen genauso ausgeführt.
 
