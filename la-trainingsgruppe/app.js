@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "19.11.2026 · 11";
+const VERSION = "19.11.2026 · 12";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -180,6 +180,11 @@ function makeSupabaseBackend(url, key) {
         ok(await T("competition_entries").update({ status: status[c.user_id], updated_at: new Date().toISOString() }).eq("entry_id", entryId).eq("user_id", c.user_id));
     },
     async answerInvite(entryId, status) { ok(await sb.rpc("answer_competition", { p_entry: entryId, p_status: status })); },
+    async feedbackBoard() { return ok(await sb.rpc("feedback_board")) || []; },
+    async voteFeedback(id, on) {
+      if (on) ok(await T("feedback_votes").upsert({ feedback_id: id, user_id: S.me.id }, { onConflict: "feedback_id,user_id", ignoreDuplicates: true }));
+      else ok(await T("feedback_votes").delete().eq("feedback_id", id).eq("user_id", S.me.id));
+    },
     // Allgemeine Tabellen (Leistung, Kalender)
     async list(table) { let q = T(table).select("*"); (ORDER[table] || []).forEach(c => { q = q.order(c); }); return ok(await q); },
     async saveRow(table, row) {
@@ -264,8 +269,10 @@ function demoSeed() {
     week_openings: [{ week_start: addDays(mon, -7) }, { week_start: mon }],
     feedback: [
       { id: "f1", user_id: "u3", category: "fehler", message: "Beim Absagen springt die Seite nach oben.", context: "Termine", app_version: "Demo", device: "iPhone", status: "neu", admin_note: "", created_at: new Date(Date.now() - 3600000).toISOString() },
-      { id: "f2", user_id: "u-trainer", category: "idee", message: "Es wäre gut, beim Plan eine Notiz für die ganze Woche zu haben.", context: "Plan", app_version: "Demo", device: "", status: "erledigt", admin_note: "Kommt in der nächsten Version.", created_at: new Date(Date.now() - 86400000).toISOString() }
-    ]
+      { id: "f2", user_id: "u-trainer", category: "idee", message: "Es wäre gut, beim Plan eine Notiz für die ganze Woche zu haben.", context: "Plan", app_version: "Demo", device: "", status: "erledigt", admin_note: "Kommt in der nächsten Version.", created_at: new Date(Date.now() - 86400000).toISOString() },
+      { id: "f3", user_id: "u4", category: "idee", message: "Eine Erinnerung, wenn die Anmeldung für die nächste Woche offen ist, wäre super.", context: "Termine", app_version: "Demo", device: "Android", status: "neu", admin_note: "", created_at: new Date(Date.now() - 2 * 86400000).toISOString() }
+    ],
+    feedback_votes: [{ feedback_id: "f1", user_id: "u4" }, { feedback_id: "f1", user_id: "u-trainer" }, { feedback_id: "f3", user_id: "u3" }]
   };
 }
 
@@ -362,7 +369,7 @@ function demoCompact(db) {
 }
 function demoAutoOpen(settings, monday) { return autoOpenAt(settings, monday); }
 function makeDemoBackend() {
-  const KEY = "la_demo_db_v8";
+  const KEY = "la_demo_db_v9";
   let db = LS.get(KEY, null) || demoPerformance(demoSeed());
   const save = () => LS.set(KEY, db);
   const me = () => LS.get("la_demo_user", "u-admin");
@@ -528,6 +535,16 @@ function makeDemoBackend() {
       needMember(); const c = (db.competition_entries || []).find(x => x.entry_id === entryId && x.user_id === me());
       if (!c) deny("Du bist für diesen Wettkampf nicht vorgesehen"); c.status = st; save();
     },
+    async feedbackBoard() {
+      needMember(); const v = db.feedback_votes || [];
+      return clone(db.feedback.slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).map(f => ({
+        id: f.id, category: f.category, message: f.message, context: f.context, status: f.status, admin_note: f.admin_note, created_at: f.created_at,
+        votes: v.filter(x => x.feedback_id === f.id).length, voted: v.some(x => x.feedback_id === f.id && x.user_id === me()), mine: f.user_id === me() })));
+    },
+    async voteFeedback(id, on) {
+      needMember(); db.feedback_votes = (db.feedback_votes || []).filter(x => !(x.feedback_id === id && x.user_id === me()));
+      if (on) db.feedback_votes.push({ feedback_id: id, user_id: me(), created_at: now() }); save();
+    },
     async setMark(sid, user, mark) {
       if (!staff()) deny("Nur Trainer und Admins können markieren");
       let a = db.attendance.find(x => x.session_id === sid && x.user_id === user);
@@ -586,7 +603,7 @@ const S = {
   planView: "week", planWeek: null, sheetChoice: {}, exSearch: "", showPast: false, scrolledToday: false,
   tests: [], norms: [], results: [], ainfo: [], injuries: [], calendar: [], comps: [],
   stats: { loaded: false }, statRange: "4w", statSort: "name", perfView: null, enterTest: null, enterDate: null,
-  termView: "training", moreView: "team", showPastCal: false, openings: [], feedback: [], fbFilter: "neu", compEntries: []
+  termView: "training", moreView: "team", showPastCal: false, openings: [], feedback: [], fbBoard: [], fbDraft: "", fbFilter: "neu", compEntries: []
 };
 if (S.tab === "team") S.tab = "settings";
 const role = () => S.me && S.me.role;
@@ -1052,7 +1069,7 @@ function fbItem(f, admin) {
   const who = (person(f.user_id) || {}).display_name || "Unbekannt";
   const when = new Date(f.created_at).toLocaleString("de-DE", { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" });
   return `<div class="fbitem ${f.status}"><div class="fbhead"><span class="kind ${f.category === "fehler" ? "wettkampf" : ""}">${FB_CAT[f.category] || f.category}</span>
-      <span class="grow small muted">${admin ? esc(who) + " · " : ""}${esc(when)}${f.context ? " · " + esc(f.context) : ""}</span>
+      <span class="grow small muted">${admin ? esc(who) + " · " : ""}${esc(when)}${f.context ? " · " + esc(f.context) : ""}${admin && votesOf(f.id) ? ` · <b>${votesOf(f.id)}× ich auch</b>` : ""}</span>
       ${f.status === "erledigt" ? '<span class="chip ok">✓ erledigt</span>' : '<span class="chip">neu</span>'}</div>
     <p class="pre" style="margin:8px 0">${esc(f.message)}</p>
     ${f.admin_note ? `<div class="small awayline"><b>Antwort:</b> ${esc(f.admin_note)}</div>` : ""}
@@ -1060,6 +1077,33 @@ function fbItem(f, admin) {
       <button class="btn sm ${f.status === "neu" ? "" : "ghost"}" data-act="fbStatus" data-id="${esc(f.id)}" data-v="${f.status === "neu" ? "erledigt" : "neu"}">${f.status === "neu" ? "Erledigt" : "Wieder öffnen"}</button>
       <button class="iconbtn" data-act="fbDelete" data-id="${esc(f.id)}" aria-label="Löschen">${ICON.trash}</button></div>`
       : `<div class="btns"><button class="btn sm ghost" data-act="fbDelete" data-id="${esc(f.id)}">Zurückziehen</button></div>`}</div>`;
+}
+const votesOf = id => ((S.fbBoard || []).find(b => b.id === id) || {}).votes || 0;
+// Ähnlichkeit zum Entwurf: gemeinsame Wörter (ab 4 Buchstaben, Wortanfang reicht, damit „Absagen“ auch „absage“ trifft)
+const fbWords = t => [...new Set(String(t).toLowerCase().replace(/[^a-zäöüß0-9 ]+/g, " ").split(/\s+/).filter(w => w.length >= 4).map(w => w.slice(0, 5)))];
+const FB_STOP = new Set(["wenn", "dass", "eine", "einen", "einem", "einer", "nicht", "beim", "wäre", "ware", "auch", "noch", "aber", "oder", "sind", "habe", "kann", "dann", "schon", "immer", "mehr", "sich", "werd", "wird", "würde", "diese", "diese", "für", "über", "nach", "bitte", "gerne", "gern", "mein", "meine"].map(w => w.slice(0, 5)));
+function fbSimilarity(msg, draft) { const d = fbWords(draft).filter(w => !FB_STOP.has(w)); if (!d.length) return 0; const m = new Set(fbWords(msg)); return d.filter(w => m.has(w)).length; }
+function fbBoardItem(b, similar) {
+  const when = new Date(b.created_at).toLocaleDateString("de-DE", { day: "numeric", month: "numeric" });
+  return `<div class="fbitem ${b.status}"><div class="fbhead"><span class="kind ${b.category === "fehler" ? "wettkampf" : ""}">${FB_CAT[b.category] || b.category}</span>
+      <span class="grow small muted">${esc(when)}${b.context ? " · " + esc(b.context) : ""}${b.mine ? " · von dir" : ""}</span>
+      ${similar ? '<span class="chip">ähnlich</span>' : ""}${b.status === "erledigt" ? '<span class="chip ok">✓ erledigt</span>' : ""}</div>
+    <p class="pre" style="margin:8px 0">${esc(b.message)}</p>
+    ${b.admin_note ? `<div class="small awayline"><b>Antwort:</b> ${esc(b.admin_note)}</div>` : ""}
+    <div class="btns fbvote">${b.mine ? `<span class="small muted grow">${b.votes ? `${b.votes}× „Ich auch“` : ""}</span><button class="btn sm ghost" data-act="fbDelete" data-id="${esc(b.id)}">Zurückziehen</button>`
+      : b.status === "erledigt" ? (b.votes ? `<span class="small muted">${b.votes}× „Ich auch“</span>` : "")
+      : `<button class="btn sm ${b.voted ? "" : "ghost"}" data-act="fbVote" data-id="${esc(b.id)}" aria-pressed="${b.voted}">${b.voted ? "✓ Ich auch" : "Ich auch"}${b.votes ? ` · ${b.votes}` : ""}</button>`}</div></div>`;
+}
+function fbBoardHtml() {
+  const all = S.fbBoard || [];
+  if (!all.length) return `<p class="small muted">Noch nichts gemeldet – du bist die oder der Erste.</p>`;
+  // Eigene Meldungen bleiben immer sichtbar, damit man die Antwort des Admins sieht
+  const scored = all.filter(b => b.status !== "erledigt" || b.mine).map(b => ({ b, s: fbSimilarity(b.message, S.fbDraft) }));
+  const sim = scored.filter(x => x.s > 0).sort((a, b) => b.s - a.s), rest = scored.filter(x => !x.s).sort((a, b) => b.b.votes - a.b.votes || String(b.b.created_at).localeCompare(String(a.b.created_at)));
+  const done = all.filter(b => b.status === "erledigt" && !b.mine);
+  return `${sim.length ? `<p class="small" style="margin:0 0 8px"><b>Klingt ähnlich wie deine Nachricht.</b> Ist es dasselbe? Dann reicht „Ich auch“.</p>` : ""}
+    ${sim.length + rest.length ? `<div class="card flush">${sim.map(x => fbBoardItem(x.b, true)).join("")}${rest.map(x => fbBoardItem(x.b, false)).join("")}</div>` : `<p class="small muted">Gerade ist nichts offen.</p>`}
+    ${done.length ? `<details class="fbdone"><summary class="small">Schon erledigt (${done.length})</summary><div class="card flush">${done.map(b => fbBoardItem(b, false)).join("")}</div></details>` : ""}`;
 }
 function viewFeedbackAdmin() {
   const list = S.feedback.filter(f => S.fbFilter === "all" || f.status === S.fbFilter);
@@ -1069,14 +1113,16 @@ function viewFeedbackAdmin() {
     <div class="btns"><button class="btn ghost" data-act="fbExport">Als Datei herunterladen</button></div>`;
 }
 function feedbackSheet() {
-  const mine = S.feedback.filter(f => f.user_id === S.me.id);
-  sheet(`<h3>Feedback zur Beta</h3><p class="small muted">Was funktioniert nicht, was fehlt, was ist umständlich? Deine Nachricht sieht nur der Admin.</p>
+  S.fbDraft = "";
+  const open = (S.fbBoard || []).filter(b => b.status !== "erledigt").length;
+  sheet(`<h3>Feedback zur Beta</h3><p class="small muted">Was funktioniert nicht, was fehlt, was ist umständlich? Unten siehst du, was schon gemeldet wurde – ohne Namen. Wer etwas geschickt hat, sieht nur der Admin.</p>
     <form data-form="feedback">
       <div class="seg" role="radiogroup" style="margin-bottom:12px">${Object.entries(FB_CAT).map(([v, l], i) => `<label class="segopt"><input type="radio" name="cat" value="${v}" ${i === 0 ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
-      <label class="f"><span>Nachricht</span><textarea name="msg" rows="5" maxlength="2000" required placeholder="z. B. Beim Absagen am Handy springt die Seite nach oben."></textarea>
+      <label class="f"><span>Nachricht</span><textarea name="msg" rows="5" maxlength="2000" required data-input="fbSimilar" placeholder="z. B. Beim Absagen am Handy springt die Seite nach oben."></textarea>
         <div class="hint">Mitgeschickt wird automatisch: Bereich „${esc(TAB_LABEL[S.tab] || S.tab)}“, App-Version und Gerätetyp.</div></label>
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Senden</button></div></form>
-    ${mine.length ? `<h3 style="font-size:1.05rem;margin-top:18px">Deine Rückmeldungen</h3><div class="card flush">${mine.map(f => fbItem(f, false)).join("")}</div>` : ""}`);
+    <h3 style="font-size:1.05rem;margin-top:18px">Schon gemeldet${open ? ` (${open} offen)` : ""}</h3>
+    <div id="fb-board">${fbBoardHtml()}</div>`);
 }
 /* ───── Team ───── */
 function memberRow(p) {
@@ -1632,7 +1678,10 @@ function calSheet(id) {
 async function reloadPerf() {
   const [tests, norms, results, ainfo, injuries, calendar, comps, feedback, compEntries] = await Promise.all(["test_types", "norms", "test_results", "athlete_info", "injuries", "calendar_entries", "competition_results", "feedback", "competition_entries"].map(t => S.be.list(t)));
   Object.assign(S, { tests, norms, results, ainfo, injuries, calendar, comps, compEntries, feedback: feedback.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))) });
+  await reloadBoard();
 }
+// Pinnwand: ohne SQL Teil 8 bleibt sie leer, die App läuft weiter
+async function reloadBoard() { try { S.fbBoard = await S.be.feedbackBoard(); } catch (e) { S.fbBoard = []; } }
 
 const perfActions = {
   perfView(el) { S.perfView = el.dataset.v; render(); },
@@ -2228,6 +2277,11 @@ Object.assign(actions, perfActions, {
       <button class="btn ghost block" data-act="closeSheet">Schließen</button></div>`);
   },
   feedback() { feedbackSheet(); },
+  async fbVote(el) {
+    const b = (S.fbBoard || []).find(x => x.id === el.dataset.id); if (!b) return;
+    await quiet(busy(el, async () => { await S.be.voteFeedback(b.id, !b.voted); await reloadBoard();
+      const box = document.getElementById("fb-board"); if (box) box.innerHTML = fbBoardHtml(); else render(); }));
+  },
   fbFilter(el) { S.fbFilter = el.dataset.v; render(); },
   async fbStatus(el) { await quiet(busy(null, async () => { await S.be.saveRow("feedback", { id: el.dataset.id, status: el.dataset.v }); await reloadPerf(); render(); })); },
   async fbReply(el) {
@@ -2240,7 +2294,7 @@ Object.assign(actions, perfActions, {
   async fbDelete(el) {
     const f = S.feedback.find(x => x.id === el.dataset.id), own = f.user_id === S.me.id;
     if (!await ask(own ? "Feedback zurückziehen?" : "Feedback löschen?", "Die Nachricht wird gelöscht.", own ? "Zurückziehen" : "Löschen", true)) return own ? feedbackSheet() : undefined;
-    await quiet(busy(null, async () => { await S.be.removeRow("feedback", f.id); await reloadPerf(); render(); if (own && S.moreView !== "feedback") feedbackSheet(); }));
+    await quiet(busy(null, async () => { await S.be.removeRow("feedback", f.id); await reloadPerf(); render(); if (own && !(S.tab === "settings" && S.moreView === "feedback")) feedbackSheet(); }));
   },
   fbExport() {
     download(`feedback_${stamp()}.json`, S.feedback.map(f => ({ datum: f.created_at, von: (person(f.user_id) || {}).display_name || "", art: FB_CAT[f.category], bereich: f.context, nachricht: f.message, status: f.status, antwort: f.admin_note, version: f.app_version, geraet: f.device })));
@@ -2286,6 +2340,7 @@ const changes = {
 };
 Object.assign(changes, perfChanges);
 const inputs = {
+  fbSimilar(el) { S.fbDraft = el.value; const box = document.getElementById("fb-board"); if (box) box.innerHTML = fbBoardHtml(); },
   exSearch(el) {
     S.exSearch = el.value; const pos = el.selectionStart;
     render(); const n = document.querySelector('[data-input="exSearch"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); }
