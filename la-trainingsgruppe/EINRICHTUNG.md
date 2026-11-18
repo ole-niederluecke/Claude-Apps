@@ -13,6 +13,7 @@ Links **SQL Editor** öffnen und **New query** wählen. Dort nacheinander ausfü
 1. Den kompletten Inhalt von [`supabase/01_grundlage.sql`](supabase/01_grundlage.sql) einfügen und auf **Run** klicken. Das legt Konten, Rollen und Rechte an.
 2. Danach in einer neuen Abfrage [`supabase/02_plan_termine.sql`](supabase/02_plan_termine.sql) einfügen und auf **Run** klicken. Das legt Wochenpläne, Übungssammlung, Termine, Zu-/Absagen und den Speicher für Übungsvideos an.
 3. Danach [`supabase/03_leistung.sql`](supabase/03_leistung.sql) genauso ausführen. Das legt Testwochen, Normen, Verletzungen, Wettkampfergebnisse und den Saisonkalender an. Die Tests aus der Testwoche und die Gruppenvoraussetzungen (30m fliegend, 80m, 300m, Standweitsprung) sind schon eingetragen.
+4. Danach [`supabase/04_anmeldung.sql`](supabase/04_anmeldung.sql) ausführen. Das bringt die wöchentliche Freigabe der Trainingsanmeldung, „Ich bin nicht da“ für Trainer und die Einstellung „trainiert selbst mit“ für Admins und Trainer. Schon angelegte Wochen bleiben offen.
 
 Beide Skripte dürfen auch mehrfach laufen. Kommen später neue Teile dazu (`03_…`), werden sie genauso ausgeführt.
 
@@ -76,6 +77,12 @@ Die Rechte werden in der Datenbank selbst geprüft, nicht nur in der App. Wer al
 - Erkannt wird jedes Blatt mit einer Zeile „Montag … Sonntag“. Darunter stehen pro Tag Ort und Uhrzeit, das Tagesthema und die Übungen, jeweils mit der Belastung in der Zeile darunter.
 - Ein Blatt „Abkürzungen“ wird in die Übungssammlung übernommen. Weitere Blätter (Übungen, Turnhalle …) erscheinen unter dem Plan.
 - Ein Plan gilt ab seiner Woche, bis ein neuerer hochgeladen wird. Ältere Pläne stehen im **Archiv**.
+
+## Trainingsanmeldung
+- Athleten können erst zu- oder absagen, wenn die Woche geöffnet ist. Trainer und Admins öffnen sie unter **Termine** mit „Jetzt öffnen“. Alternativ geht es automatisch, z. B. sonntags um 18 Uhr (**Mehr → Einstellungen → Trainingsanmeldung**).
+- Trainer sagen nicht zu. Sie können aber „Ich bin nicht da“ eintragen, ein Grund wie Fortbildung ist freiwillig. Die Athleten sehen am Termin, wer fehlt, den Grund sehen nur Trainer und Admins.
+- Admins und Trainer, die selbst mittrainieren, setzen unter **Mein Konto** den Haken „Ich trainiere selbst mit“. Danach sagen sie wie Athleten zu und erscheinen bei Tests und Statistik.
+- Über das runde Symbol oben rechts erreicht man das eigene Konto, die Demo (man bleibt dabei angemeldet) und „Abmelden“.
 
 ## Testwochen und Normen
 - Unter **Leistung → Eintragen** wählt der Trainer Test und Datum und trägt die Werte der ganzen Gruppe in einem Rutsch ein. Zeiten über 60 s gehen als `1:52,30`, beim 5er Hop links und rechts getrennt (es zählt das bessere Bein).

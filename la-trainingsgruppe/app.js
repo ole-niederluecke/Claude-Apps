@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "18.11.2026 · 6";
+const VERSION = "18.11.2026 · 7";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -92,8 +92,9 @@ function setPref(k, v) { prefs[k] = v; LS.set("la_prefs", prefs); applyPrefs(); 
 
 /* ───────────── Backend: Supabase ───────────── */
 const BACKUP_TABLES = ["plan_groups", "plans", "plan_sheets", "exercises", "sessions", "session_weeks", "attendance", "attendance_private", "attendance_log",
-  "test_types", "norms", "athlete_info", "injuries", "test_results", "calendar_entries", "competition_results"];
-const CONFLICT = { attendance: "session_id,user_id", attendance_private: "session_id,user_id", session_weeks: "week_start", athlete_info: "user_id" };
+  "test_types", "norms", "athlete_info", "injuries", "test_results", "calendar_entries", "competition_results", "week_openings"];
+const CONFLICT = { attendance: "session_id,user_id", attendance_private: "session_id,user_id", session_weeks: "week_start", athlete_info: "user_id", week_openings: "week_start" };
+const INSERT_ONLY = new Set(["session_weeks", "week_openings", "attendance_log"]); // nur ergänzen, nie überschreiben
 const ORDER = { test_types: ["sort_order", "name"], calendar_entries: ["start_date"], test_results: ["test_date"], competition_results: ["comp_date"], injuries: ["start_date"] };
 
 function makeSupabaseBackend(url, key) {
@@ -164,6 +165,10 @@ function makeSupabaseBackend(url, key) {
     async attendanceLog(ids) { return ids.length ? ok(await T("attendance_log").select("*").in("session_id", ids).order("at")) : []; },
     async respond(session, user, status, reason, note) { ok(await sb.rpc("respond", { p_session: session, p_user: user, p_status: status, p_reason: reason || null, p_note: note || "" })); },
     async setMark(session, user, mark) { ok(await sb.rpc("set_mark", { p_session: session, p_user: user, p_mark: mark })); },
+    async clearResponse(session, user) { ok(await sb.rpc("clear_response", { p_session: session, p_user: user })); },
+    async openings() { return (ok(await T("week_openings").select("week_start"))).map(r => r.week_start); },
+    async openWeek(monday, open) { ok(await sb.rpc("open_week", { p_week: monday, p_open: open })); },
+    async changeEmail(email) { ok(await sb.auth.updateUser({ email }, { emailRedirectTo: appUrl() })); },
     // Allgemeine Tabellen (Leistung, Kalender)
     async list(table) { let q = T(table).select("*"); (ORDER[table] || []).forEach(c => { q = q.order(c); }); return ok(await q); },
     async saveRow(table, row) {
@@ -182,7 +187,8 @@ function makeSupabaseBackend(url, key) {
       return out;
     },
     async upsert(table, rows) {
-      for (let i = 0; i < rows.length; i += 500) ok(await T(table).upsert(rows.slice(i, i + 500), CONFLICT[table] ? { onConflict: CONFLICT[table] } : undefined));
+      const opt = Object.assign({}, CONFLICT[table] ? { onConflict: CONFLICT[table] } : {}, INSERT_ONLY.has(table) ? { ignoreDuplicates: true } : {});
+      for (let i = 0; i < rows.length; i += 500) ok(await T(table).upsert(rows.slice(i, i + 500), opt));
     }
   };
 }
@@ -225,7 +231,7 @@ function demoSeed() {
     settings: { id: 1, team_name: "LT DSHS Köln (Demo)", plan_visibility: "all", session_template: [{ dow: 2, time: "17:25", location: "LAA" }, { dow: 4, time: "17:55", location: "LAA" }, { dow: 6, time: "09:55", location: "LAA" }] },
     plan_groups: [g("g1", "Kurzsprint", 1), g("g2", "Langsprint", 2), g("g3", "Stab", 3), g("g4", "Alternativplan", 4)],
     profiles: [
-      p("u-admin", "Alex Admin", "admin", true, "g1"), p("u-trainer", "Toni Trainer", "trainer", true, null),
+      Object.assign(p("u-admin", "Alex Admin", "admin", true, "g1"), { trains: true }), p("u-trainer", "Toni Trainer", "trainer", true, null),
       p("u1", "Lena Berger", "athlete", true, "g1"), p("u2", "Jonas Keller", "athlete", true, "g1"),
       p("u3", "Mia Schulz", "athlete", true, "g2"), p("u4", "Paul Wagner", "athlete", true, "g2"),
       p("u5", "Sara Neumann", "athlete", true, "g3"), p("u6", "Noah Fischer", "athlete", true, null),
@@ -242,7 +248,8 @@ function demoSeed() {
       { id: "e3", name: "Nordic Hamstring Exercise", abbreviation: "NHE", category: "Kraft", description: "Exzentrisch langsam nach vorne ablassen.", video_url: "", video_path: "" },
       { id: "e4", name: "Bulgarian Split Squat-Sprünge", abbreviation: "BSS-Jump", category: "Sprung", description: "", video_url: "", video_path: "" }
     ],
-    sessions, session_weeks: weeks, attendance: att, attendance_private: priv, attendance_log: log
+    sessions, session_weeks: weeks, attendance: att, attendance_private: priv, attendance_log: log,
+    week_openings: [{ week_start: addDays(mon, -7) }, { week_start: mon }]
   };
 }
 
@@ -304,8 +311,9 @@ function demoPerformance(db) {
   return db;
 }
 
+function demoAutoOpen(settings, monday) { return autoOpenAt(settings, monday); }
 function makeDemoBackend() {
-  const KEY = "la_demo_db_v3";
+  const KEY = "la_demo_db_v4";
   let db = LS.get(KEY, null) || demoPerformance(demoSeed());
   const save = () => LS.set(KEY, db);
   const me = () => LS.get("la_demo_user", "u-admin");
@@ -431,17 +439,33 @@ function makeDemoBackend() {
     async respond(sid, user, status, reason, note) {
       needMember();
       if (user !== me() && !staff()) deny("Du kannst nur für dich selbst zu- oder absagen");
-      if (status === "no" && !reason) deny("Bitte wähle einen Absagegrund");
-      if (status === "no" && reason === "sonstiges" && !String(note || "").trim()) deny("Bitte beschreibe kurz den Grund");
+      const target = db.profiles.find(p => p.id === user), coach = target && target.role !== "athlete" && !target.trains;
+      if (status === "no" && !reason && !coach) deny("Bitte wähle einen Absagegrund");
+      if (status === "no" && reason === "sonstiges" && !coach && !String(note || "").trim()) deny("Bitte beschreibe kurz den Grund");
       const s = db.sessions.find(x => x.id === sid); if (!s) deny("Termin nicht gefunden"); if (s.cancelled) deny("Dieser Termin ist abgesagt");
+      const wk = mondayOf(s.session_date), auto = demoAutoOpen(db.settings, wk);
+      if (!staff() && !(db.week_openings || []).some(w => w.week_start === wk) && !(auto && new Date() >= auto)) deny("Die Anmeldung für diese Woche ist noch nicht geöffnet");
       let a = db.attendance.find(x => x.session_id === sid && x.user_id === user);
       if (!a) { a = { session_id: sid, user_id: user, status: null, coach_mark: null }; db.attendance.push(a); }
       a.status = status; a.updated_at = now();
       db.attendance_private = db.attendance_private.filter(x => !(x.session_id === sid && x.user_id === user));
-      if (status === "no") db.attendance_private.push({ session_id: sid, user_id: user, reason, note: note || "" });
+      if (status === "no" && (reason || note)) db.attendance_private.push({ session_id: sid, user_id: user, reason: reason || null, note: note || "" });
       db.attendance_log.push({ id: Date.now(), session_id: sid, user_id: user, status, reason: status === "no" ? reason : null, coach_mark: null, changed_by: me(), at: now() });
       save();
     },
+    async clearResponse(sid, user) {
+      needMember(); if (user !== me() && !staff()) deny();
+      const a = db.attendance.find(x => x.session_id === sid && x.user_id === user); if (a) a.status = null;
+      db.attendance_private = db.attendance_private.filter(x => !(x.session_id === sid && x.user_id === user));
+      db.attendance_log.push({ id: Date.now(), session_id: sid, user_id: user, status: "cleared", reason: null, coach_mark: null, changed_by: me(), at: now() }); save();
+    },
+    async openings() { needMember(); return (db.week_openings || []).map(w => w.week_start); },
+    async openWeek(monday, open) {
+      if (!staff()) deny("Nur Trainer und Admins können die Anmeldung öffnen");
+      db.week_openings = (db.week_openings || []).filter(w => w.week_start !== monday);
+      if (open) db.week_openings.push({ week_start: monday, opened_at: now() }); save();
+    },
+    async changeEmail() { deny("Im Demo-Modus gibt es keine E-Mail-Adressen."); },
     async setMark(sid, user, mark) {
       if (!staff()) deny("Nur Trainer und Admins können markieren");
       let a = db.attendance.find(x => x.session_id === sid && x.user_id === user);
@@ -497,7 +521,7 @@ const S = {
   planView: "week", planWeek: null, planSheet: LS.get("la_sheet", null), exSearch: "", showPast: false, scrolledToday: false,
   tests: [], norms: [], results: [], ainfo: [], injuries: [], calendar: [], comps: [],
   stats: { loaded: false }, statRange: "4w", statSort: "name", perfView: null, enterTest: null, enterDate: null,
-  termView: "training", moreView: "team", showPastCal: false
+  termView: "training", moreView: "team", showPastCal: false, openings: []
 };
 if (S.tab === "team") S.tab = "settings";
 const role = () => S.me && S.me.role;
@@ -506,6 +530,15 @@ const isStaff = () => role() === "admin" || role() === "trainer";
 const canEdit = p => p.id === S.me.id || isAdmin() || (role() === "trainer" && p.role === "athlete");
 const groupName = id => (S.groups.find(g => g.id === id) || {}).name;
 const pending = () => S.profiles.filter(p => !p.approved && p.role === "athlete");
+const trainsP = p => p.trains == null ? p.role === "athlete" : !!p.trains;          // trainiert mit (Zu-/Absagen, Tests, Statistik)
+const trainees = () => S.profiles.filter(p => p.approved && trainsP(p));
+const isCoach = p => p.role !== "athlete" && !trainsP(p);                               // Trainer/Admin, der nicht mitrainiert
+function autoOpenAt(settings, monday) {
+  const a = settings && settings.registration_auto; if (!a || !a.dow) return null;
+  const d = parseIso(Number(a.dow) === 1 ? monday : addDays(monday, Number(a.dow) - 8));
+  const [h, m] = String(a.time || "00:00").split(":").map(Number); d.setHours(h || 0, m || 0, 0, 0); return d;
+}
+const weekOpen = monday => S.openings.includes(monday) || (() => { const t = autoOpenAt(S.settings, monday); return !!(t && new Date() >= t); })();
 const person = id => S.profiles.find(p => p.id === id);
 
 function connection() {
@@ -520,7 +553,7 @@ async function loadSessions() {
   await Promise.all([S.be.ensureWeek(mon), S.be.ensureWeek(addDays(mon, 7))]).catch(() => {});
   S.sessions = await S.be.sessions(addDays(mon, -35), addDays(mon, 20));
   const ids = S.sessions.map(s => s.id);
-  [S.att, S.priv, S.log] = await Promise.all([S.be.attendance(ids), S.be.attendancePrivate(ids), S.be.attendanceLog(ids)]);
+  [S.att, S.priv, S.log, S.openings] = await Promise.all([S.be.attendance(ids), S.be.attendancePrivate(ids), S.be.attendanceLog(ids), S.be.openings()]);
 }
 async function loadAll() {
   S.loadError = null;
@@ -569,17 +602,16 @@ function findExercise(text) {
 }
 
 /* ───────────── Termin-Logik ───────────── */
-const REASONS = { krank: "Krank", verletzt: "Verletzt", uni: "Uni / Prüfung", arbeit: "Arbeit", sonstiges: "Sonstiges" };
+const REASONS = { krank: "Krank", verletzt: "Verletzt", uni: "Uni / Prüfung", arbeit: "Arbeit", sonstiges: "Sonstiges", fortbildung: "Fortbildung" };
+const ATHLETE_REASONS = ["krank", "verletzt", "uni", "arbeit", "sonstiges"];
+const COACH_REASONS = ["fortbildung", "krank", "arbeit", "sonstiges"];
 const attOf = (sid, u) => S.att.find(a => a.session_id === sid && a.user_id === u);
 const privOf = (sid, u) => S.priv.find(a => a.session_id === sid && a.user_id === u);
 const logOf = (sid, u) => S.log.filter(a => a.session_id === sid && a.user_id === u && a.status);
 const flipped = (sid, u) => { const l = logOf(sid, u); const cur = attOf(sid, u); return cur && cur.status === "no" && l.some(x => x.status === "yes"); };
 const sessionKey = s => s.session_date + " " + (s.start_time || "99:99");
-function rosterOf(s) {
-  const ids = new Set(S.profiles.filter(p => p.approved && p.role === "athlete").map(p => p.id));
-  S.att.filter(a => a.session_id === s.id && a.status).forEach(a => ids.add(a.user_id));
-  return [...ids].map(person).filter(Boolean).sort(byName);
-}
+function rosterOf(s) { return trainees().sort(byName); }
+const coachesAway = s => S.profiles.filter(p => p.approved && isCoach(p) && (attOf(s.id, p.id) || {}).status === "no");
 function countsOf(s) {
   const r = rosterOf(s); let yes = 0, no = 0;
   r.forEach(p => { const a = attOf(s.id, p.id); if (a && a.status === "yes") yes++; else if (a && a.status === "no") no++; });
@@ -652,11 +684,12 @@ function demoBar() {
 function viewTop() {
   const name = (S.settings && S.settings.team_name) || "LT DSHS Köln";
   return `<header class="top"><div class="top-in"><img class="logo" src="logo.png" alt="Logo LT DSHS Köln">
-    <div class="grow"><h1>${esc(name)}</h1><div class="sub">${esc(S.me.display_name)} · ${ROLE_LABEL[role()]}</div></div></div></header>`;
+    <div class="grow"><h1>${esc(name)}</h1><div class="sub">${esc(S.me.display_name)} · ${ROLE_LABEL[role()]}</div></div>
+    <button class="acctbtn" data-act="account" aria-label="Konto: ${esc(S.me.display_name)}"><span class="avatar ${role()}">${esc(initials(S.me.display_name))}</span></button></div></header>`;
 }
 function viewNav() {
   const n = isStaff() ? pending().length : 0;
-  const ns = nextSession(), myOpen = ns && !attOf(ns.id, S.me.id)?.status && S.me.role === "athlete" ? 1 : 0;
+  const ns = nextSession(), myOpen = ns && trainsP(S.me) && weekOpen(mondayOf(ns.session_date)) && !attOf(ns.id, S.me.id)?.status ? 1 : 0;
   const b = (id, label, badge) => `<button data-act="tab" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ""}>${ICON[id]}${label}${badge ? `<span class="badge">${badge}</span>` : ""}</button>`;
   return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Plan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("leistung", "Leistung")}${b("settings", "Mehr", n)}</div></nav>`;
 }
@@ -741,7 +774,7 @@ function viewStart() {
       ${phase ? `<div class="small muted">Aktuelle Phase</div><b class="daytitle" style="margin:0 0 8px">${esc(phase.title)}${phase.end_date ? ` <span class="small muted">bis ${dm(phase.end_date)}</span>` : ""}</b>` : ""}
       ${nextComp ? `<div class="small muted">Als Nächstes · ${KIND_LABEL[nextComp.kind]}</div><b>${esc(nextComp.title)}</b> <span class="small muted">${fmtDay(nextComp.start_date)} · in ${Math.round((parseIso(nextComp.start_date) - parseIso(t2)) / 864e5)} Tagen</span>` : ""}</button>`;
   if (isStaff()) {
-    const athletes = S.profiles.filter(p => p.approved && p.role === "athlete");
+    const athletes = trainees();
     html += `<h2>Team</h2><div class="card"><div class="stats">
       <div class="stat"><b>${athletes.length}</b><span>Athleten</span></div>
       <div class="stat"><b>${athletes.filter(p => currentInjury(p.id)).length}</b><span>verletzt</span></div>
@@ -830,15 +863,28 @@ function sessionCard(s, compact) {
     <div class="small muted">${[hhmm(s.start_time) && hhmm(s.start_time) + " Uhr", s.location].filter(Boolean).map(esc).join(" · ")}</div>
     ${s.note ? `<div class="small">${esc(s.note)}</div>` : ""}</div></div>`;
   if (s.cancelled) return `<div class="card sess cancelled">${head}</div>`;
-  const past = s.session_date < todayIso();
+  const past = s.session_date < todayIso(), open = weekOpen(mondayOf(s.session_date));
+  const away = coachesAway(s);
+  const awayLine = away.length ? `<div class="small awayline">Nicht da: ${away.map(p => { const pr2 = privOf(s.id, p.id); return esc(p.display_name) + (isStaff() && pr2 && (pr2.reason || pr2.note) ? ` (${esc([REASONS[pr2.reason], pr2.note].filter(Boolean).join(": "))})` : ""); }).join(", ")}</div>` : "";
+  const counts = `<button class="counts" data-act="sessOpen" data-id="${esc(s.id)}"><span><b>${c.yes}</b> dabei</span><span><b>${c.no}</b> abgesagt</span><span><b>${c.open}</b> offen</span>${ICON.chev}</button>`;
+  if (isCoach(S.me)) {
+    const meAway = a && a.status === "no";
+    return `<div class="card sess">${head}${awayLine}${past ? "" : `<div class="resp one">${meAway
+      ? `<button class="on no" data-act="coachBack" data-id="${esc(s.id)}">${ICON.check} Doch da</button>`
+      : `<button data-act="coachAway" data-id="${esc(s.id)}">${ICON.x} Ich bin nicht da</button>`}</div>`}
+      ${!open && !past ? `<div class="small muted" style="margin-top:8px">Anmeldung für die Athleten noch geschlossen.</div>` : ""}${counts}</div>`;
+  }
+  if (!past && !open && !isStaff()) {
+    const at = autoOpenAt(S.settings, mondayOf(s.session_date));
+    return `<div class="card sess">${head}${awayLine}<div class="closed small">${at ? `Anmeldung öffnet ${WD[(at.getDay() + 6) % 7]}, ${at.getDate()}.${at.getMonth() + 1}. um ${pad(at.getHours())}:${pad(at.getMinutes())} Uhr` : "Die Anmeldung für diese Woche öffnet der Trainer."}</div>${counts}</div>`;
+  }
   const resp = past ? (a && a.status ? `<div class="small muted">Du hattest ${a.status === "yes" ? "zugesagt" : "abgesagt"}${a.coach_mark === "late" ? " · zu spät" : a.coach_mark === "no_show" ? " · nicht erschienen" : ""}</div>` : "")
     : `<div class="resp">
       <button class="${a && a.status === "yes" ? "on yes" : ""}" data-act="respYes" data-id="${esc(s.id)}" aria-pressed="${!!(a && a.status === "yes")}">${ICON.check} Dabei</button>
       <button class="${a && a.status === "no" ? "on no" : ""}" data-act="respNo" data-id="${esc(s.id)}" aria-pressed="${!!(a && a.status === "no")}">${ICON.x} ${a && a.status === "no" ? "Abgesagt" : "Absagen"}</button></div>
       ${a && a.status === "no" && pr ? `<div class="small muted" style="margin-top:6px">Grund: ${esc(REASONS[pr.reason] || pr.reason)}${pr.note ? " – " + esc(pr.note) : ""} <span class="muted">(sehen nur Trainer)</span></div>` : ""}
       ${a && a.coach_mark ? `<div class="small" style="margin-top:6px">Trainer: ${a.coach_mark === "late" ? "zu spät" : "nicht erschienen"}</div>` : ""}`;
-  return `<div class="card sess">${head}${resp}
-    <button class="counts" data-act="sessOpen" data-id="${esc(s.id)}"><span><b>${c.yes}</b> dabei</span><span><b>${c.no}</b> abgesagt</span><span><b>${c.open}</b> offen</span>${ICON.chev}</button></div>`;
+  return `<div class="card sess">${head}${awayLine}${resp}${counts}</div>`;
 }
 function viewTermine() {
   const seg = `<div class="seg" style="margin-bottom:14px"><button data-act="termView" data-v="training" aria-pressed="${S.termView !== "season"}">Training</button><button data-act="termView" data-v="season" aria-pressed="${S.termView === "season"}">Saison &amp; Wettkämpfe</button></div>`;
@@ -854,7 +900,12 @@ function viewTraining() {
   let html = isStaff() ? `<div class="btns" style="margin:0 0 6px"><button class="btn ghost" data-act="sessNew">+ Termin</button></div>` : "";
   const weeks = Object.keys(byWeek).sort();
   if (!weeks.length) html += `<div class="card muted">Keine kommenden Termine.</div>`;
-  weeks.forEach(w => { html += `<h2>${w === mon ? "Diese Woche" : w === addDays(mon, 7) ? "Nächste Woche" : weekLabel(w)}</h2>` + byWeek[w].map(s => sessionCard(s)).join(""); });
+  weeks.forEach(w => {
+    const open = weekOpen(w), at = autoOpenAt(S.settings, w), manual = S.openings.includes(w);
+    const bar = isStaff() ? `<div class="weekbar ${open ? "open" : ""}"><span class="grow">${open ? "<b>Anmeldung offen</b>" : `<b>Anmeldung geschlossen</b>${at ? ` · öffnet automatisch ${WD[(at.getDay() + 6) % 7]} ${pad(at.getHours())}:${pad(at.getMinutes())}` : ""}`}</span>
+      ${open ? (manual ? `<button class="btn sm ghost" data-act="weekOpen" data-w="${w}" data-open="0">Schließen</button>` : "") : `<button class="btn sm" data-act="weekOpen" data-w="${w}" data-open="1">Jetzt öffnen</button>`}</div>` : "";
+    html += `<h2>${w === mon ? "Diese Woche" : w === addDays(mon, 7) ? "Nächste Woche" : weekLabel(w)}</h2>${bar}` + byWeek[w].map(s => sessionCard(s)).join("");
+  });
   if (past.length) {
     html += `<h2>Vergangene Termine</h2>`;
     html += S.showPast ? past.map(s => sessionCard(s)).join("") : `<button class="btn ghost block" data-act="showPast">${past.length} vergangene Termine anzeigen</button>`;
@@ -911,8 +962,10 @@ function viewSettings() {
       <div class="hint">Gilt nur auf diesem Gerät.</div></div>
     <h2>Mein Konto</h2><div class="card">
       <form data-form="myname"><label class="f"><span>Name</span><input type="text" name="name" required maxlength="60" value="${esc(S.me.display_name)}"></label>
-      <label class="f"><span>E-Mail</span><input type="email" value="${esc(S.user.email || "")}" readonly></label>
-      <button class="btn sm ghost">Name speichern</button></form>
+      ${S.me.role !== "athlete" ? `<label class="opt"><input type="checkbox" name="trains" ${trainsP(S.me) ? "checked" : ""}><span><b>Ich trainiere selbst mit</b><span class="small muted">Dann sagst du wie die Athleten zu/ab und erscheinst bei Tests und Statistik.</span></span></label>` : ""}
+      <button class="btn sm ghost">Speichern</button></form>
+      <form data-form="myemail" style="margin-top:14px"><label class="f"><span>E-Mail</span><input type="email" name="email" required value="${esc(S.user.email || "")}" ${S.be.kind === "demo" ? "readonly" : ""}></label>
+      ${S.be.kind === "demo" ? "" : `<button class="btn sm ghost">E-Mail ändern</button><div class="hint">Du bekommst einen Bestätigungslink an die neue Adresse.</div>`}</form>
       <div class="btns"><button class="btn ghost" data-act="changePw" ${S.be.kind === "demo" ? "disabled" : ""}>Passwort ändern</button>
       <button class="btn ghost" data-act="logout">Abmelden</button></div></div>`;
   if (isStaff()) {
@@ -932,6 +985,12 @@ function viewSettings() {
         <button class="iconbtn" data-act="groupRename" data-id="${esc(g.id)}" aria-label="Umbenennen">${ICON.edit}</button>
         <button class="iconbtn" data-act="groupDelete" data-id="${esc(g.id)}" aria-label="Löschen">${ICON.trash}</button></div>`).join("")}
       <div class="setrow"><button class="btn sm ghost" data-act="groupAdd">+ Trainingsgruppe hinzufügen</button></div></div>
+      <h2>Trainingsanmeldung</h2><div class="card">
+      <p class="small muted">Athleten können erst zu- oder absagen, wenn die Woche geöffnet ist. Öffnen geht jederzeit unter <b>Termine</b>.</p>
+      <form data-form="regauto">
+        ${[["manual", "Nur von Hand öffnen"], ["7", "Automatisch am Sonntag vor der Woche"], ["1", "Automatisch am Montag der Woche"]].map(([v, l]) => `<label class="opt"><input type="radio" name="mode" value="${v}" ${String((s.registration_auto || {}).dow || "manual") === v ? "checked" : ""}><span><b>${l}</b></span></label>`).join("")}
+        <label class="f"><span>Uhrzeit für automatisches Öffnen</span><input type="time" name="time" value="${esc((s.registration_auto || {}).time || "18:00")}"></label>
+        <button class="btn sm ghost">Speichern</button></form></div>
       <h2>Feste Trainingstage</h2><div class="card">
       <p class="small muted">Für diese Tage werden jede Woche automatisch Termine zum Zu- und Absagen angelegt. Einzelne Termine änderst oder ergänzt du unter <b>Termine</b>.</p>
       <form data-form="template">${tpl.map((t, i) => templateRow(t, i)).join("")}<div id="tpl-more"></div>
@@ -1109,7 +1168,7 @@ function testRows(u) {
 }
 function viewLeistung() {
   const staff = isStaff();
-  const segs = staff ? [["overview", "Übersicht"], ["enter", "Eintragen"], ["comps", "Wettkämpfe"], ["setup", "Normen"]] : [["mine", "Meine Werte"], ["comps", "Wettkämpfe"]];
+  const segs = staff ? [["overview", "Übersicht"], ["enter", "Eintragen"], ...(trainsP(S.me) ? [["mine", "Ich"]] : []), ["comps", "Wettkämpfe"], ["setup", "Normen"]] : [["mine", "Meine Werte"], ["comps", "Wettkämpfe"]];
   if (!segs.some(([v]) => v === S.perfView)) S.perfView = segs[0][0];
   let html = `<div class="seg" style="margin-bottom:14px">${segs.map(([v, l]) => `<button data-act="perfView" data-v="${v}" aria-pressed="${S.perfView === v}">${l}</button>`).join("")}</div>`;
   if (S.perfView === "mine") {
@@ -1129,7 +1188,7 @@ function viewOverview() {
     loadStats().then(render).catch(e => toast(deErr(e), "error"));
     return `<div class="card muted">Statistik wird geladen …</div>`;
   }
-  const athletes = S.profiles.filter(p => p.approved && p.role === "athlete");
+  const athletes = trainees();
   const rows = athletes.map(p => ({ p, a: attendanceStats(p.id, S.stats.sessions, S.stats.att), n: normStatus(p.id), inj: currentInjury(p.id) }));
   const rated = rows.filter(r => r.a.rate != null);
   const avg = rated.length ? Math.round(rated.reduce((s, r) => s + r.a.rate, 0) / rated.length) : null;
@@ -1155,7 +1214,7 @@ function viewEnter() {
   if (!tests.length) return `<div class="card muted">Noch keine Tests angelegt (unter „Normen“).</div>`;
   const t = testById(S.enterTest) || tests[0]; S.enterTest = t.id;
   const date = S.enterDate || todayIso();
-  const athletes = S.profiles.filter(p => p.approved && p.role === "athlete");
+  const athletes = trainees().sort(byName);
   const inp = (name, v) => `<input type="text" inputmode="decimal" name="${name}" value="${v == null ? "" : esc(fmtNum(v, t.unit))}" placeholder="${esc(t.unit)}" autocomplete="off">`;
   return `<div class="card">
     <div class="two"><label class="f"><span>Test</span><select data-change="enterTest">${tests.map(x => `<option value="${esc(x.id)}" ${x.id === t.id ? "selected" : ""}>${esc(x.name)}${x.unit ? " (" + esc(x.unit) + ")" : ""}</option>`).join("")}</select></label>
@@ -1413,7 +1472,7 @@ const perfForms = {
   },
   async bulkResults(f) {
     const t = testById(f.dataset.tid), date = f.dataset.date; let n = 0, bad = [];
-    for (const p of S.profiles.filter(x => x.approved && x.role === "athlete")) {
+    for (const p of trainees()) {
       const ex = S.results.find(r => r.user_id === p.id && r.test_id === t.id && r.test_date === date);
       const row = { user_id: p.id, test_id: t.id, test_date: date };
       if (t.sides) {
@@ -1517,6 +1576,7 @@ function memberSheet(id) {
       ${staffEdit ? `<label class="f"><span>Trainingsgruppe</span><select name="group">${groupOpts}</select><div class="hint">Bestimmt, welches Blatt im Wochenplan zuerst geöffnet wird.</div></label>` : ""}
       ${isAdmin() ? `<label class="f"><span>Rolle</span><select name="role">${["athlete", "trainer", "admin"].map(r => `<option value="${r}" ${r === p.role ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select>
         <div class="hint">Trainer: Freischalten, Gruppen, Pläne, Termine, Absagegründe sehen. Admin: zusätzlich Rollen, Teamname, Backup.</div></label>` : ""}
+      ${isAdmin() && p.role !== "athlete" ? `<label class="opt"><input type="checkbox" name="trains" ${trainsP(p) ? "checked" : ""}><span><b>Trainiert selbst mit</b><span class="small muted">Zu-/Absagen, Tests und Statistik wie bei Athleten.</span></span></label>` : ""}
       ${staffEdit && !self ? `<label class="opt"><input type="checkbox" name="approved" ${p.approved ? "checked" : ""}><span><b>Zugang aktiv</b><span class="small muted">Ohne Haken kann sich die Person zwar anmelden, sieht aber nichts.</span></span></label>` : ""}
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div>
     </form>
@@ -1526,10 +1586,20 @@ function memberSheet(id) {
 
 function absageSheet(sid, uidFor) {
   const s = S.sessions.find(x => x.id === sid), pr = privOf(sid, uidFor);
-  const forOther = uidFor !== S.me.id;
+  const forOther = uidFor !== S.me.id, target = person(uidFor);
+  if (isCoach(target)) {
+    sheet(`<h3>Nicht da</h3><p class="small muted">${esc(s.title || "Training")} · ${fmtLong(s.session_date)}${forOther ? ` · ${esc(target.display_name)}` : ""}</p>
+      <form data-form="absage" data-id="${esc(sid)}" data-user="${esc(uidFor)}" data-coach="1">
+        <div class="small muted" style="margin-bottom:6px">Grund (freiwillig)</div>
+        <div class="reasons">${COACH_REASONS.map(k => `<label class="opt"><input type="radio" name="reason" value="${k}" ${pr && pr.reason === k ? "checked" : ""}><span><b>${REASONS[k]}</b></span></label>`).join("")}</div>
+        <label class="f"><span>Bemerkung (freiwillig)</span><input type="text" name="note" maxlength="300" value="${esc(pr ? pr.note : "")}" placeholder="z. B. Vertretung macht …"></label>
+        <p class="small muted">Die Athleten sehen, dass du nicht da bist. Den Grund sehen nur Trainer und Admins.</p>
+        <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Eintragen</button></div></form>`);
+    return;
+  }
   sheet(`<h3>Absagen</h3><p class="small muted">${esc(s.title || "Training")} · ${fmtLong(s.session_date)}${forOther ? ` · für <b>${esc(person(uidFor).display_name)}</b>` : ""}</p>
     <form data-form="absage" data-id="${esc(sid)}" data-user="${esc(uidFor)}">
-      <div class="reasons">${Object.entries(REASONS).map(([k, l]) => `<label class="opt"><input type="radio" name="reason" value="${k}" required ${pr && pr.reason === k ? "checked" : ""}><span><b>${l}</b></span></label>`).join("")}</div>
+      <div class="reasons">${ATHLETE_REASONS.map(k => [k, REASONS[k]]).map(([k, l]) => `<label class="opt"><input type="radio" name="reason" value="${k}" required ${pr && pr.reason === k ? "checked" : ""}><span><b>${l}</b></span></label>`).join("")}</div>
       <label class="f"><span>Bemerkung <span class="muted">(bei „Sonstiges“ Pflicht)</span></span><textarea name="note" maxlength="300" rows="2">${esc(pr ? pr.note : "")}</textarea></label>
       <p class="small muted">Den Grund sehen nur Trainer und Admins.</p>
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Absagen</button></div></form>`);
@@ -1727,6 +1797,7 @@ const actions = {
   tplRemove(el) { el.closest("[data-row]").remove(); },
   // Konto & Team
   async logout() {
+    closeSheet();
     if (S.be.kind === "demo") return actions.demoExit();
     await S.be.signOut(); S.user = null; S.me = null; S.authMode = "login"; S.authMsg = null; render();
   },
@@ -1796,7 +1867,7 @@ const actions = {
       download(`lt-dshs-backup_${stamp()}.json`, {
         app: APP_ID, format: 2, created_at: new Date().toISOString(), created_by: S.me.display_name, app_version: VERSION,
         settings: { team_name: S.settings.team_name, plan_visibility: S.settings.plan_visibility, session_template: S.settings.session_template },
-        profiles: S.profiles.map(p => ({ id: p.id, display_name: p.display_name, email: S.emails[p.id] || null, role: p.role, approved: p.approved, plan_group_id: p.plan_group_id })),
+        profiles: S.profiles.map(p => ({ id: p.id, display_name: p.display_name, email: S.emails[p.id] || null, role: p.role, approved: p.approved, plan_group_id: p.plan_group_id, trains: p.trains ?? null })),
         tables
       });
       LS.set("la_last_backup", new Date().toISOString());
@@ -1833,6 +1904,23 @@ const actions = {
 
 Object.assign(actions, perfActions, {
   goTeam() { S.tab = "settings"; S.moreView = "team"; LS.set("la_tab", S.tab); render(); scrollTo(0, 0); },
+  account() {
+    const demo = S.be.kind === "demo";
+    sheet(`<div class="accthead"><span class="avatar ${role()}">${esc(initials(S.me.display_name))}</span><div><h3 style="margin:0">${esc(S.me.display_name)}</h3>
+      <div class="small muted">${ROLE_LABEL[role()]}${S.user.email ? " · " + esc(S.user.email) : ""}</div></div></div>
+      <div class="btns col"><button class="btn ghost block" data-act="goAccount">Mein Konto bearbeiten</button>
+      ${demo ? `<button class="btn ghost block" data-act="demoExit">Demo beenden</button>` : `<button class="btn ghost block" data-act="demoStart">Demo ansehen (du bleibst angemeldet)</button>`}
+      ${demo ? "" : `<button class="btn ghost block" data-act="logout">Abmelden</button>`}
+      <button class="btn ghost block" data-act="closeSheet">Schließen</button></div>`);
+  },
+  goAccount() { closeSheet(); S.tab = "settings"; S.moreView = "settings"; LS.set("la_tab", S.tab); render(); scrollTo(0, 0); },
+  coachAway(el) { absageSheet(el.dataset.id, S.me.id); },
+  async coachBack(el) { await quiet(busy(el.parentElement, async () => { await S.be.clearResponse(el.dataset.id, S.me.id); await reloadSessions(); toast("Eingetragen: doch da"); })); },
+  async weekOpen(el) {
+    const open = el.dataset.open === "1";
+    if (!open && !await ask("Anmeldung schließen?", "Athleten können für diese Woche dann nicht mehr zu- oder absagen. Bereits abgegebene Antworten bleiben erhalten.", "Schließen", true)) return;
+    await quiet(busy(el.parentElement, async () => { await S.be.openWeek(el.dataset.w, open); await reloadSessions(); toast(open ? "Anmeldung geöffnet" : "Anmeldung geschlossen"); }));
+  },
   goSeason() { S.tab = "termine"; S.termView = "season"; LS.set("la_tab", S.tab); render(); scrollTo(0, 0); }
 });
 
@@ -1911,6 +1999,7 @@ async function restoreBackup(data) {
   for (const p of rows) {
     if (!known.has(p.id)) { r.skipped++; continue; }
     const patch = { display_name: p.display_name, plan_group_id: mapG(p.plan_group_id) };
+    if ("trains" in p) patch.trains = p.trains;
     if (p.id !== S.me.id) { patch.role = p.role; patch.approved = p.approved; }
     try { await S.be.updateProfile(p.id, patch); r.people++; } catch { r.skipped++; }
   }
@@ -1951,7 +2040,20 @@ const forms = {
     if (f.pw.value !== f.pw2.value) return toast("Die Passwörter stimmen nicht überein.", "error");
     await S.be.setPassword(f.pw.value); closeSheet(); toast("Passwort geändert");
   },
-  async myname(f) { await S.be.updateProfile(S.me.id, { display_name: f.name.value.trim() }); await refresh(); toast("Name gespeichert"); },
+  async myname(f) {
+    const patch = { display_name: f.name.value.trim() };
+    if (f.trains) patch.trains = f.trains.checked;
+    await S.be.updateProfile(S.me.id, patch); await refresh(); toast("Gespeichert");
+  },
+  async myemail(f) {
+    const email = f.email.value.trim(); if (email === S.user.email) return;
+    await S.be.changeEmail(email); toast("Bestätigungslink an " + email + " geschickt");
+  },
+  async regauto(f) {
+    const mode = (f.querySelector("[name=mode]:checked") || {}).value;
+    const v = mode === "manual" ? null : { dow: Number(mode), time: f.time.value || "18:00" };
+    S.settings = await S.be.updateSettings({ registration_auto: v }); render(); toast("Gespeichert");
+  },
   async teamname(f) { S.settings = await S.be.updateSettings({ team_name: f.name.value.trim() }); render(); toast("Gespeichert"); },
   async template(f) {
     const rows = [...f.querySelectorAll("[data-row]")].map(r => ({ dow: Number(r.querySelector("[name=dow]").value), time: r.querySelector("[name=time]").value, location: r.querySelector("[name=location]").value.trim() }))
@@ -1967,16 +2069,17 @@ const forms = {
       patch.role = f.role.value;
     }
     if (f.approved && f.approved.checked !== p.approved) patch.approved = f.approved.checked;
+    if (f.trains && f.trains.checked !== trainsP(p)) patch.trains = f.trains.checked;
     if (Object.keys(patch).length) { await S.be.updateProfile(id, patch); await refresh(); toast("Gespeichert"); }
     closeSheet();
   },
   async absage(f) {
-    const reason = (f.querySelector("[name=reason]:checked") || {}).value, note = f.note.value.trim();
-    if (!reason) return toast("Bitte wähle einen Grund.", "error");
-    if (reason === "sonstiges" && !note) return toast("Bitte beschreibe kurz den Grund.", "error");
+    const reason = (f.querySelector("[name=reason]:checked") || {}).value || null, note = f.note.value.trim(), coach = f.dataset.coach === "1";
+    if (!reason && !coach) return toast("Bitte wähle einen Grund.", "error");
+    if (reason === "sonstiges" && !note && !coach) return toast("Bitte beschreibe kurz den Grund.", "error");
     await S.be.respond(f.dataset.id, f.dataset.user, "no", reason, note);
     await loadSessions(); render();
-    if (f.dataset.user !== S.me.id) attPersonSheet(f.dataset.id, f.dataset.user); else { closeSheet(); toast("Abgesagt"); }
+    if (f.dataset.user !== S.me.id) attPersonSheet(f.dataset.id, f.dataset.user); else { closeSheet(); toast(coach ? "Eingetragen: nicht da" : "Abgesagt"); }
   },
   async session(f) {
     const row = { title: f.title.value.trim() || "Training", session_date: f.date.value, start_time: f.time.value || null, location: f.location.value.trim(), note: f.note.value.trim() };
@@ -2062,7 +2165,9 @@ async function boot() {
     if (!window.supabase) { $("#app").innerHTML = viewMessage("Fehler", "Die Supabase-Bibliothek konnte nicht geladen werden.", `<button class="btn block" data-act="update">Neu laden</button>`); return; }
     try { S.be = makeSupabaseBackend(conn.url, conn.key); }
     catch (e) { LS.del("la_conn"); toast(deErr(e), "error"); render(); return; }
+    const be = S.be;
     S.be.onAuth(async (ev, session) => {
+      if (S.be !== be) return; // Demo läuft gerade: echte Anmeldung im Hintergrund ignorieren
       if (ev === "PASSWORD_RECOVERY") { S.recovery = true; S.user = session?.user || S.user; render(); }
       else if (ev === "SIGNED_OUT") { S.user = null; S.me = null; render(); }
       else if (ev === "SIGNED_IN" && session && session.user.id !== S.user?.id) { S.user = session.user; await refresh(); }
