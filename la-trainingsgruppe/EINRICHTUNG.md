@@ -3,18 +3,11 @@
 Kurzanleitung für die einmalige Einrichtung. Das ausführliche Handbuch (Rollen, Abläufe, Datenschutz) steht in der App unter **Mehr → Einstellungen → Admin → Admin-Handbuch** und ist nur für Admins sichtbar.
 
 ## 1. Datenbank (Supabase)
-Im Supabase-Projekt links **SQL Editor → New query** öffnen. Die Dateien aus `supabase/` der Reihe nach einfügen und jeweils auf **Run** klicken:
+Im Supabase-Projekt links **SQL Editor → New query** öffnen, den kompletten Inhalt von `supabase/alles_in_einem.sql` einfügen und auf **Run** klicken. Fertig.
 
-1. `01_grundlage.sql`
-2. `02_plan_termine.sql`
-3. `03_leistung.sql`
-4. `04_anmeldung.sql`
-5. `05_feedback.sql`
-6. `06_planzuordnung_statistik.sql`
-7. `07_wettkampfmeldung.sql`
-8. `08_feedback_pinnwand.sql`
+Das gilt auch für **jedes Update**: Kommt eine neue Version, einfach wieder `alles_in_einem.sql` komplett ausführen, und zwar **vor** dem Mergen. Die Datei darf beliebig oft laufen. Vorhandene Daten, eigene Tests und Normen bleiben erhalten.
 
-Alle Skripte dürfen auch mehrfach laufen. Kommt mit einem Update eine neue Datei dazu, wird sie **vor** dem Mergen genauso ausgeführt.
+Die Einzeldateien `01_…sql` bis `08_…sql` enthalten dasselbe, nur aufgeteilt nach Themen. Man braucht sie nicht einzeln auszuführen.
 
 ## 2. Anmeldung einstellen
 Unter **Authentication**:

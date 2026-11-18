@@ -1059,7 +1059,7 @@ function viewAdminHelp() {
   <p>Die Project URL und der publishable Key in <code>config.js</code> sind öffentlich. Ohne freigeschaltetes Konto kommt man trotzdem an nichts heran, weil die Datenbank die Rechte bei jeder Anfrage selbst prüft.</p>
   <p>Der <b>secret- bzw. service_role-Key</b> aus Supabase umgeht alle Regeln. Er gehört nie ins Repo, in die App oder in einen Chat.</p>
   <p>Verletzungen sind Gesundheitsdaten. Sichtbar sind sie nur für Trainer, Admins und die Person selbst. Sag neuen Mitgliedern kurz, was gespeichert wird und wer es sieht.</p>
-  <h4>Updates</h4><p>Kommt eine neue Version mit einer SQL-Datei (<code>supabase/0X_….sql</code>), diese <b>vor</b> dem Mergen im Supabase SQL Editor ausführen. Danach in der App unter Einstellungen → Version → Aktualisieren.</p>
+  <h4>Updates</h4><p>Bei einer neuen Version <code>supabase/alles_in_einem.sql</code> <b>vor</b> dem Mergen komplett im Supabase SQL Editor ausführen. Die Datei darf beliebig oft laufen, vorhandene Daten bleiben erhalten. Danach in der App unter Einstellungen → Version → Aktualisieren.</p>
   </div>
   <div class="card helptext">${planFormatHtml()}</div>`;
 }
