@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "18.11.2026 · 3";
+const VERSION = "18.11.2026 · 4";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -549,7 +549,7 @@ function demoBar() {
 }
 function viewTop() {
   const name = (S.settings && S.settings.team_name) || "LT DSHS Köln";
-  return `<header class="top"><div class="top-in"><img class="logo" src="icon-192.png" alt="">
+  return `<header class="top"><div class="top-in"><img class="logo" src="logo.png" alt="Logo LT DSHS Köln">
     <div class="grow"><h1>${esc(name)}</h1><div class="sub">${esc(S.me.display_name)} · ${ROLE_LABEL[role()]}</div></div></div></header>`;
 }
 function viewNav() {
@@ -559,11 +559,11 @@ function viewNav() {
   return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Plan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("team", "Team", n)}${b("settings", "Mehr")}</div></nav>`;
 }
 function viewMessage(title, text, actions) {
-  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>${title}</h1></div><div class="card"><p>${text}</p>${actions}</div></div>`;
+  return `<div class="auth"><div class="brand"><img src="logo.png" alt="Logo Leichtathletik-Team DSHS Köln"><h1>${title}</h1></div><div class="card"><p>${text}</p>${actions}</div></div>`;
 }
 
 function viewSetup() {
-  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>LT DSHS Köln</h1>
+  return `<div class="auth"><div class="brand"><img src="logo.png" alt="Logo Leichtathletik-Team DSHS Köln"><h1>LT DSHS Köln</h1>
     <p class="muted">Die App ist noch mit keinem Server verbunden.</p></div>
     <div class="card"><h3>Ausprobieren</h3><p class="muted small">Alles läuft nur auf diesem Gerät, mit Beispielpersonen. Du kannst zwischen Admin-, Trainer- und Athletenansicht wechseln.</p>
       <button class="btn block" data-act="demoStart">Demo starten</button></div>
@@ -597,12 +597,12 @@ function viewAuth() {
       <p style="text-align:center;margin-top:10px"><button class="linkbtn" data-act="authMode" data-mode="forgot">Passwort vergessen?</button></p>
       <p style="text-align:center">Neu hier? <button class="linkbtn" data-act="authMode" data-mode="register">Konto anlegen</button></p>`;
   const title = { login: "Anmelden", register: "Registrieren", forgot: "Passwort vergessen" }[m];
-  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>LT DSHS Köln</h1><p class="muted">${title}</p></div>
+  return `<div class="auth"><div class="brand"><img src="logo.png" alt="Logo Leichtathletik-Team DSHS Köln"><h1>LT DSHS Köln</h1><p class="muted">${title}</p></div>
     <div class="card">${note}${form}</div>
     ${S.be.kind === "supabase" && connection()?.source === "local" ? `<p style="text-align:center"><button class="linkbtn small" data-act="disconnect">Verbindung ändern</button></p>` : ""}</div>`;
 }
 function viewNewPassword() {
-  return `<div class="auth"><div class="brand"><img src="icon-192.png" alt=""><h1>Neues Passwort</h1></div>
+  return `<div class="auth"><div class="brand"><img src="logo.png" alt="Logo Leichtathletik-Team DSHS Köln"><h1>Neues Passwort</h1></div>
     <div class="card"><form data-form="newpw">
       <label class="f"><span>Neues Passwort</span><input type="password" name="pw" required minlength="8" autocomplete="new-password"></label>
       <label class="f"><span>Wiederholen</span><input type="password" name="pw2" required minlength="8" autocomplete="new-password"></label>
