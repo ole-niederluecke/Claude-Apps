@@ -14,6 +14,7 @@ Links **SQL Editor** öffnen und **New query** wählen. Dort nacheinander ausfü
 2. Danach in einer neuen Abfrage [`supabase/02_plan_termine.sql`](supabase/02_plan_termine.sql) einfügen und auf **Run** klicken. Das legt Wochenpläne, Übungssammlung, Termine, Zu-/Absagen und den Speicher für Übungsvideos an.
 3. Danach [`supabase/03_leistung.sql`](supabase/03_leistung.sql) genauso ausführen. Das legt Testwochen, Normen, Verletzungen, Wettkampfergebnisse und den Saisonkalender an. Die Tests aus der Testwoche und die Gruppenvoraussetzungen (30m fliegend, 80m, 300m, Standweitsprung) sind schon eingetragen.
 4. Danach [`supabase/04_anmeldung.sql`](supabase/04_anmeldung.sql) ausführen. Das bringt die wöchentliche Freigabe der Trainingsanmeldung, „Ich bin nicht da“ für Trainer und die Einstellung „trainiert selbst mit“ für Admins und Trainer. Schon angelegte Wochen bleiben offen.
+5. Danach [`supabase/05_feedback.sql`](supabase/05_feedback.sql) ausführen. Das bringt den Feedback-Knopf und das Beta-Schild.
 
 Beide Skripte dürfen auch mehrfach laufen. Kommen später neue Teile dazu (`03_…`), werden sie genauso ausgeführt.
 
@@ -89,6 +90,16 @@ Die Rechte werden in der Datenbank selbst geprüft, nicht nur in der App. Wer al
 - Krafttests (1RM in kg, bei Klimmzug und Dips das Zusatzgewicht) trägt jeder unter **Leistung → Meine Werte** selbst ein.
 - Normen gelten je Geschlecht und auf Wunsch nur für eine Trainingsgruppe. Wer in Kurz- und Langsprint mittrainiert, bekommt im Athletenprofil (Leistung → Übersicht → Name) beide Gruppen. Dort steht auch, ob die Normen der Jungs oder Mädels gelten.
 - Verletzungen trägt der Trainer im Athletenprofil ein und legt jeweils fest, ob sie von der Trainingsbeteiligung und/oder von den Tests befreien.
+
+## Beta und Feedback
+- Solange die Beta läuft, steht „Beta“ neben dem Teamnamen. Ein Tipp darauf (oder Konto-Menü → Feedback geben) öffnet ein kurzes Formular mit Fehler, Idee oder Sonstiges.
+- Alle Rückmeldungen sieht nur der Admin unter **Mehr → Feedback**. Dort kann er antworten und sie als erledigt markieren. Die Tester sehen ihre eigenen Rückmeldungen samt Antwort.
+- Das Beta-Schild schaltet der Admin unter **Mehr → Einstellungen → Admin** aus.
+
+## Datenschutz und Sicherheit
+- Im öffentlichen GitHub-Repository liegt nur der **Programmcode**, keine Daten. Pläne, Zu-/Absagen, Testwerte, Verletzungen und Konten liegen ausschließlich in der Supabase-Datenbank.
+- Die Project URL und der publishable Key in `config.js` sind öffentlich. Wer sie kennt, kommt ohne freigeschaltetes Konto trotzdem an nichts heran, denn die Rechte-Regeln aus den SQL-Dateien prüft der Server bei jeder Anfrage.
+- Der **secret-/service_role-Key** aus Supabase umgeht alle Regeln. Er gehört nie ins Repo, in die App oder in einen Chat.
 
 ## Gut zu wissen
 - **Videos:** Kurzvideos zu Übungen bis 50 MB. Die kostenlose Supabase-Stufe hat 1 GB Speicher, das reicht für einige Dutzend kurze Clips. Alternativ geht ein Link zu YouTube oder Instagram. Videos sind nicht im Backup enthalten.

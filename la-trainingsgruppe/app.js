@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "18.11.2026 · 7";
+const VERSION = "18.11.2026 · 9";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -92,10 +92,10 @@ function setPref(k, v) { prefs[k] = v; LS.set("la_prefs", prefs); applyPrefs(); 
 
 /* ───────────── Backend: Supabase ───────────── */
 const BACKUP_TABLES = ["plan_groups", "plans", "plan_sheets", "exercises", "sessions", "session_weeks", "attendance", "attendance_private", "attendance_log",
-  "test_types", "norms", "athlete_info", "injuries", "test_results", "calendar_entries", "competition_results", "week_openings"];
+  "test_types", "norms", "athlete_info", "injuries", "test_results", "calendar_entries", "competition_results", "week_openings", "feedback"];
 const CONFLICT = { attendance: "session_id,user_id", attendance_private: "session_id,user_id", session_weeks: "week_start", athlete_info: "user_id", week_openings: "week_start" };
 const INSERT_ONLY = new Set(["session_weeks", "week_openings", "attendance_log"]); // nur ergänzen, nie überschreiben
-const ORDER = { test_types: ["sort_order", "name"], calendar_entries: ["start_date"], test_results: ["test_date"], competition_results: ["comp_date"], injuries: ["start_date"] };
+const ORDER = { feedback: ["created_at"], test_types: ["sort_order", "name"], calendar_entries: ["start_date"], test_results: ["test_date"], competition_results: ["comp_date"], injuries: ["start_date"] };
 
 function makeSupabaseBackend(url, key) {
   const sb = window.supabase.createClient(url, key, {
@@ -249,7 +249,11 @@ function demoSeed() {
       { id: "e4", name: "Bulgarian Split Squat-Sprünge", abbreviation: "BSS-Jump", category: "Sprung", description: "", video_url: "", video_path: "" }
     ],
     sessions, session_weeks: weeks, attendance: att, attendance_private: priv, attendance_log: log,
-    week_openings: [{ week_start: addDays(mon, -7) }, { week_start: mon }]
+    week_openings: [{ week_start: addDays(mon, -7) }, { week_start: mon }],
+    feedback: [
+      { id: "f1", user_id: "u3", category: "fehler", message: "Beim Absagen springt die Seite nach oben.", context: "Termine", app_version: "Demo", device: "iPhone", status: "neu", admin_note: "", created_at: new Date(Date.now() - 3600000).toISOString() },
+      { id: "f2", user_id: "u-trainer", category: "idee", message: "Es wäre gut, beim Plan eine Notiz für die ganze Woche zu haben.", context: "Plan", app_version: "Demo", device: "", status: "erledigt", admin_note: "Kommt in der nächsten Version.", created_at: new Date(Date.now() - 86400000).toISOString() }
+    ]
   };
 }
 
@@ -263,6 +267,8 @@ const DEMO_RULES = (() => {
     test_results: { read: "staffSelf", defaults: { note: "", value_left: null, value_right: null, entered_by: null },
       canWrite: (n, o, c) => c.staff || (n.user_id === c.me && c.test && c.test.entry === "self" && (!o || o.entered_by === c.me)) },
     calendar_entries: { read: "member", defaults: { end_date: null, location: "", note: "" }, canWrite: staffOnly },
+    feedback: { read: "adminSelf", defaults: { category: "idee", context: "", app_version: "", device: "", status: "neu", admin_note: "" },
+      canWrite: (n, o, c) => c.admin || (n.user_id === c.me && (!o || (o.status === n.status && o.admin_note === n.admin_note))) },
     competition_results: { read: "member", defaults: { entry_id: null, place: "", wind: "", note: "", better: "lower", entered_by: null },
       canWrite: (n, o, c) => c.staff || (n.user_id === c.me && (!o || o.user_id === c.me)) }
   };
@@ -313,7 +319,7 @@ function demoPerformance(db) {
 
 function demoAutoOpen(settings, monday) { return autoOpenAt(settings, monday); }
 function makeDemoBackend() {
-  const KEY = "la_demo_db_v4";
+  const KEY = "la_demo_db_v5";
   let db = LS.get(KEY, null) || demoPerformance(demoSeed());
   const save = () => LS.set(KEY, db);
   const me = () => LS.get("la_demo_user", "u-admin");
@@ -476,7 +482,7 @@ function makeDemoBackend() {
     },
     async list(table) {
       needMember(); const R = DEMO_RULES[table]; const rows = db[table] || [];
-      const vis = rows.filter(r => R.read === "member" || staff() || r.user_id === me());
+      const vis = rows.filter(r => R.read === "member" || (R.read === "adminSelf" ? myRole() === "admin" : staff()) || r.user_id === me());
       const ord = ORDER[table] || [];
       return clone(vis.slice().sort((a, b) => { for (const k of ord) { const c = String(a[k] ?? "").localeCompare(String(b[k] ?? ""), "de", { numeric: true }); if (c) return c; } return 0; }));
     },
@@ -485,7 +491,8 @@ function makeDemoBackend() {
       const key = table === "athlete_info" ? "user_id" : "id";
       const old = list.find(r => r[key] === row[key]);
       const n = Object.assign({}, old || {}, row);
-      if (!R.canWrite(n, old, { me: me(), staff: staff(), test: db.test_types.find(t => t.id === n.test_id) })) deny();
+      if (table === "feedback" && !n.user_id) n.user_id = me();
+      if (!R.canWrite(n, old, { me: me(), staff: staff(), admin: myRole() === "admin", test: db.test_types.find(t => t.id === n.test_id) })) deny();
       if (table === "test_results") {
         const t = db.test_types.find(x => x.id === n.test_id);
         if (t && t.sides && (n.value_left != null || n.value_right != null)) n.value = t.better === "lower" ? Math.min(...[n.value_left, n.value_right].filter(v => v != null)) : Math.max(...[n.value_left, n.value_right].filter(v => v != null));
@@ -497,7 +504,7 @@ function makeDemoBackend() {
     },
     async removeRow(table, id) {
       needMember(); const R = DEMO_RULES[table]; const old = (db[table] || []).find(r => r.id === id);
-      if (!old || !R.canWrite(old, old, { me: me(), staff: staff(), test: db.test_types.find(t => t.id === old.test_id), del: true })) deny();
+      if (!old || !R.canWrite(old, old, { me: me(), staff: staff(), admin: myRole() === "admin", test: db.test_types.find(t => t.id === old.test_id), del: true })) deny();
       db[table] = db[table].filter(r => r.id !== id);
       if (table === "test_types") { db.norms = db.norms.filter(r => r.test_id !== id); db.test_results = db.test_results.filter(r => r.test_id !== id); }
       save();
@@ -521,7 +528,7 @@ const S = {
   planView: "week", planWeek: null, planSheet: LS.get("la_sheet", null), exSearch: "", showPast: false, scrolledToday: false,
   tests: [], norms: [], results: [], ainfo: [], injuries: [], calendar: [], comps: [],
   stats: { loaded: false }, statRange: "4w", statSort: "name", perfView: null, enterTest: null, enterDate: null,
-  termView: "training", moreView: "team", showPastCal: false, openings: []
+  termView: "training", moreView: "team", showPastCal: false, openings: [], feedback: [], fbFilter: "neu"
 };
 if (S.tab === "team") S.tab = "settings";
 const role = () => S.me && S.me.role;
@@ -684,11 +691,11 @@ function demoBar() {
 function viewTop() {
   const name = (S.settings && S.settings.team_name) || "LT DSHS Köln";
   return `<header class="top"><div class="top-in"><img class="logo" src="logo.png" alt="Logo LT DSHS Köln">
-    <div class="grow"><h1>${esc(name)}</h1><div class="sub">${esc(S.me.display_name)} · ${ROLE_LABEL[role()]}</div></div>
+    <div class="grow"><h1>${esc(name)}${S.settings && S.settings.beta !== false ? ` <button class="betachip" data-act="feedback" aria-label="Beta – Feedback geben">Beta</button>` : ""}</h1><div class="sub">${esc(S.me.display_name)} · ${ROLE_LABEL[role()]}</div></div>
     <button class="acctbtn" data-act="account" aria-label="Konto: ${esc(S.me.display_name)}"><span class="avatar ${role()}">${esc(initials(S.me.display_name))}</span></button></div></header>`;
 }
 function viewNav() {
-  const n = isStaff() ? pending().length : 0;
+  const n = (isStaff() ? pending().length : 0) + (isAdmin() ? S.feedback.filter(f => f.status === "neu").length : 0);
   const ns = nextSession(), myOpen = ns && trainsP(S.me) && weekOpen(mondayOf(ns.session_date)) && !attOf(ns.id, S.me.id)?.status ? 1 : 0;
   const b = (id, label, badge) => `<button data-act="tab" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ""}>${ICON[id]}${label}${badge ? `<span class="badge">${badge}</span>` : ""}</button>`;
   return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Plan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("leistung", "Leistung")}${b("settings", "Mehr", n)}</div></nav>`;
@@ -894,7 +901,7 @@ function viewTermine() {
 function viewTraining() {
   const mon = mondayOf(todayIso()), t = todayIso();
   const upcoming = S.sessions.filter(s => s.session_date >= t);
-  const past = S.sessions.filter(s => s.session_date < t).reverse();
+  const past = S.sessions.filter(s => s.session_date < t && s.session_date >= addDays(t, -14)).reverse(); // ältere nur noch in der Statistik
   const byWeek = {};
   upcoming.forEach(s => (byWeek[mondayOf(s.session_date)] = byWeek[mondayOf(s.session_date)] || []).push(s));
   let html = isStaff() ? `<div class="btns" style="margin:0 0 6px"><button class="btn ghost" data-act="sessNew">+ Termin</button></div>` : "";
@@ -908,17 +915,52 @@ function viewTraining() {
   });
   if (past.length) {
     html += `<h2>Vergangene Termine</h2>`;
-    html += S.showPast ? past.map(s => sessionCard(s)).join("") : `<button class="btn ghost block" data-act="showPast">${past.length} vergangene Termine anzeigen</button>`;
+    html += S.showPast ? past.map(s => sessionCard(s)).join("") : `<button class="btn ghost block" data-act="showPast">${past.length} Termine der letzten 2 Wochen anzeigen</button>`;
   }
-  if (!isStaff()) html += `<p class="small muted" style="margin:10px 4px">Absagegründe sehen nur Trainer und Admins. Alle sehen, wer zugesagt hat.</p>`;
+  html += `<p class="small muted" style="margin:10px 4px">${isStaff() ? "Ältere Termine werden ausgeblendet und zählen nur noch in der Statistik (Leistung → Übersicht)." : "Absagegründe sehen nur Trainer und Admins. Alle sehen, wer zugesagt hat."}</p>`;
   return html;
 }
 
 /* ───── Mehr: Team + Einstellungen ───── */
 function viewMore() {
-  const n = isStaff() ? pending().length : 0;
-  return `<div class="seg" style="margin-bottom:14px"><button data-act="moreView" data-v="team" aria-pressed="${S.moreView === "team"}">Team${n ? ` (${n})` : ""}</button><button data-act="moreView" data-v="settings" aria-pressed="${S.moreView === "settings"}">Einstellungen</button></div>`
-    + (S.moreView === "settings" ? viewSettings() : viewTeam());
+  const n = isStaff() ? pending().length : 0, nf = S.feedback.filter(f => f.status === "neu").length;
+  if (S.moreView === "feedback" && !isAdmin()) S.moreView = "team";
+  return `<div class="seg" style="margin-bottom:14px"><button data-act="moreView" data-v="team" aria-pressed="${S.moreView === "team"}">Team${n ? ` (${n})` : ""}</button>
+    ${isAdmin() ? `<button data-act="moreView" data-v="feedback" aria-pressed="${S.moreView === "feedback"}">Feedback${nf ? ` (${nf})` : ""}</button>` : ""}
+    <button data-act="moreView" data-v="settings" aria-pressed="${S.moreView === "settings"}">Einstellungen</button></div>`
+    + (S.moreView === "settings" ? viewSettings() : S.moreView === "feedback" ? viewFeedbackAdmin() : viewTeam());
+}
+const FB_CAT = { fehler: "Fehler", idee: "Idee", sonstiges: "Sonstiges" };
+const TAB_LABEL = { start: "Start", plan: "Plan", termine: "Termine", leistung: "Leistung", settings: "Mehr" };
+function fbItem(f, admin) {
+  const who = (person(f.user_id) || {}).display_name || "Unbekannt";
+  const when = new Date(f.created_at).toLocaleString("de-DE", { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" });
+  return `<div class="fbitem ${f.status}"><div class="fbhead"><span class="kind ${f.category === "fehler" ? "wettkampf" : ""}">${FB_CAT[f.category] || f.category}</span>
+      <span class="grow small muted">${admin ? esc(who) + " · " : ""}${esc(when)}${f.context ? " · " + esc(f.context) : ""}</span>
+      ${f.status === "erledigt" ? '<span class="chip ok">✓ erledigt</span>' : '<span class="chip">neu</span>'}</div>
+    <p class="pre" style="margin:8px 0">${esc(f.message)}</p>
+    ${f.admin_note ? `<div class="small awayline"><b>Antwort:</b> ${esc(f.admin_note)}</div>` : ""}
+    ${admin ? `<div class="btns"><button class="btn sm ghost" data-act="fbReply" data-id="${esc(f.id)}">Antworten</button>
+      <button class="btn sm ${f.status === "neu" ? "" : "ghost"}" data-act="fbStatus" data-id="${esc(f.id)}" data-v="${f.status === "neu" ? "erledigt" : "neu"}">${f.status === "neu" ? "Erledigt" : "Wieder öffnen"}</button>
+      <button class="iconbtn" data-act="fbDelete" data-id="${esc(f.id)}" aria-label="Löschen">${ICON.trash}</button></div>`
+      : `<div class="btns"><button class="btn sm ghost" data-act="fbDelete" data-id="${esc(f.id)}">Zurückziehen</button></div>`}</div>`;
+}
+function viewFeedbackAdmin() {
+  const list = S.feedback.filter(f => S.fbFilter === "all" || f.status === S.fbFilter);
+  const c = k => S.feedback.filter(f => k === "all" || f.status === k).length;
+  return `<div class="sortrow small muted">${[["neu", "Neu"], ["erledigt", "Erledigt"], ["all", "Alle"]].map(([k, l]) => `<button class="linkbtn small" data-act="fbFilter" data-v="${k}" ${S.fbFilter === k ? 'aria-pressed="true"' : ""}>${l} (${c(k)})</button>`).join(" · ")}</div>
+    ${list.length ? `<div class="card flush">${list.map(f => fbItem(f, true)).join("")}</div>` : `<div class="card muted">${S.fbFilter === "neu" ? "Kein neues Feedback." : "Noch kein Feedback."}</div>`}
+    <div class="btns"><button class="btn ghost" data-act="fbExport">Als Datei herunterladen</button></div>`;
+}
+function feedbackSheet() {
+  const mine = S.feedback.filter(f => f.user_id === S.me.id);
+  sheet(`<h3>Feedback zur Beta</h3><p class="small muted">Was funktioniert nicht, was fehlt, was ist umständlich? Deine Nachricht sieht nur der Admin.</p>
+    <form data-form="feedback">
+      <div class="seg" role="radiogroup" style="margin-bottom:12px">${Object.entries(FB_CAT).map(([v, l], i) => `<label class="segopt"><input type="radio" name="cat" value="${v}" ${i === 0 ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
+      <label class="f"><span>Nachricht</span><textarea name="msg" rows="5" maxlength="2000" required placeholder="z. B. Beim Absagen am Handy springt die Seite nach oben."></textarea>
+        <div class="hint">Mitgeschickt wird automatisch: Bereich „${esc(TAB_LABEL[S.tab] || S.tab)}“, App-Version und Gerätetyp.</div></label>
+      <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Senden</button></div></form>
+    ${mine.length ? `<h3 style="font-size:1.05rem;margin-top:18px">Deine Rückmeldungen</h3><div class="card flush">${mine.map(f => fbItem(f, false)).join("")}</div>` : ""}`);
 }
 /* ───── Team ───── */
 function memberRow(p) {
@@ -999,6 +1041,7 @@ function viewSettings() {
   }
   if (isAdmin()) {
     html += `<h2>Admin</h2><div class="card">
+      <label class="opt"><input type="checkbox" data-change="betaToggle" ${s.beta !== false ? "checked" : ""}><span><b>Beta-Phase</b><span class="small muted">Zeigt „Beta“ in der Kopfzeile. Ein Tipp darauf öffnet das Feedback-Formular.</span></span></label>
       <form data-form="teamname"><label class="f"><span>Name der Trainingsgruppe</span><input type="text" name="name" required maxlength="60" value="${esc(s.team_name || "")}"></label>
       <button class="btn sm ghost">Speichern</button></form></div>
       <div class="card"><h3>Backup</h3>
@@ -1404,8 +1447,8 @@ function calSheet(id) {
     ${id ? `<div class="btns"><button class="btn danger block" data-act="calDelete" data-id="${esc(id)}">Eintrag löschen</button></div>` : ""}`);
 }
 async function reloadPerf() {
-  const [tests, norms, results, ainfo, injuries, calendar, comps] = await Promise.all(["test_types", "norms", "test_results", "athlete_info", "injuries", "calendar_entries", "competition_results"].map(t => S.be.list(t)));
-  Object.assign(S, { tests, norms, results, ainfo, injuries, calendar, comps });
+  const [tests, norms, results, ainfo, injuries, calendar, comps, feedback] = await Promise.all(["test_types", "norms", "test_results", "athlete_info", "injuries", "calendar_entries", "competition_results", "feedback"].map(t => S.be.list(t)));
+  Object.assign(S, { tests, norms, results, ainfo, injuries, calendar, comps, feedback: feedback.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))) });
 }
 
 const perfActions = {
@@ -1456,6 +1499,7 @@ const perfActions = {
   memberPerf(el) { closeSheet(); S.tab = "leistung"; S.perfView = "overview"; render(); loadStats().then(() => athleteSheet(el.dataset.id)).catch(e => toast(deErr(e), "error")); }
 };
 const perfChanges = {
+  async betaToggle(el) { await quiet(busy(null, async () => { S.settings = await S.be.updateSettings({ beta: el.checked }); render(); toast(el.checked ? "Beta-Schild an" : "Beta-Schild aus"); })); },
   enterTest(el) { S.enterTest = el.value; render(); },
   enterDate(el) { S.enterDate = el.value || todayIso(); render(); },
   compEntry(el) {
@@ -1464,6 +1508,16 @@ const perfChanges = {
   }
 };
 const perfForms = {
+  async feedback(f) {
+    const msg = f.msg.value.trim(); if (!msg) return toast("Bitte schreib kurz, worum es geht.", "error");
+    const ua = navigator.userAgent, device = (/iPhone|iPad/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : "Gerät") + (matchMedia("(display-mode: standalone)").matches ? " · App" : " · Browser") + ` · ${innerWidth}px`;
+    await S.be.saveRow("feedback", { user_id: S.me.id, category: (f.querySelector("[name=cat]:checked") || {}).value || "idee", message: msg, context: TAB_LABEL[S.tab] || S.tab, app_version: VERSION, device });
+    await reloadPerf(); render(); closeSheet(); toast("Danke für dein Feedback!");
+  },
+  async fbReply(f) {
+    await S.be.saveRow("feedback", { id: f.dataset.id, admin_note: f.note.value.trim(), status: f.done.checked ? "erledigt" : "neu" });
+    await reloadPerf(); closeSheet(); render(); toast("Gespeichert");
+  },
   async result(f) {
     const t = testById(f.dataset.tid), row = { user_id: f.dataset.uid, test_id: t.id, test_date: f.date.value, note: f.note.value.trim() };
     if (t.sides) { row.value_left = parseVal(f.l.value); row.value_right = parseVal(f.r.value); if (row.value_left == null && row.value_right == null) return toast("Bitte mindestens ein Bein eintragen.", "error"); }
@@ -1908,10 +1962,29 @@ Object.assign(actions, perfActions, {
     const demo = S.be.kind === "demo";
     sheet(`<div class="accthead"><span class="avatar ${role()}">${esc(initials(S.me.display_name))}</span><div><h3 style="margin:0">${esc(S.me.display_name)}</h3>
       <div class="small muted">${ROLE_LABEL[role()]}${S.user.email ? " · " + esc(S.user.email) : ""}</div></div></div>
-      <div class="btns col"><button class="btn ghost block" data-act="goAccount">Mein Konto bearbeiten</button>
+      <div class="btns col"><button class="btn ghost block" data-act="feedback">Feedback geben</button>
+      <button class="btn ghost block" data-act="goAccount">Mein Konto bearbeiten</button>
       ${demo ? `<button class="btn ghost block" data-act="demoExit">Demo beenden</button>` : `<button class="btn ghost block" data-act="demoStart">Demo ansehen (du bleibst angemeldet)</button>`}
       ${demo ? "" : `<button class="btn ghost block" data-act="logout">Abmelden</button>`}
       <button class="btn ghost block" data-act="closeSheet">Schließen</button></div>`);
+  },
+  feedback() { feedbackSheet(); },
+  fbFilter(el) { S.fbFilter = el.dataset.v; render(); },
+  async fbStatus(el) { await quiet(busy(null, async () => { await S.be.saveRow("feedback", { id: el.dataset.id, status: el.dataset.v }); await reloadPerf(); render(); })); },
+  async fbReply(el) {
+    const f = S.feedback.find(x => x.id === el.dataset.id);
+    sheet(`<h3>Antwort</h3><p class="pre small">${esc(f.message)}</p><form data-form="fbReply" data-id="${esc(f.id)}">
+      <label class="f"><span>Antwort (sieht die Person in ihren Rückmeldungen)</span><textarea name="note" rows="3" maxlength="1000">${esc(f.admin_note)}</textarea></label>
+      <label class="opt"><input type="checkbox" name="done" ${f.status === "erledigt" ? "checked" : ""}><span><b>Als erledigt markieren</b></span></label>
+      <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>`);
+  },
+  async fbDelete(el) {
+    const f = S.feedback.find(x => x.id === el.dataset.id), own = f.user_id === S.me.id;
+    if (!await ask(own ? "Feedback zurückziehen?" : "Feedback löschen?", "Die Nachricht wird gelöscht.", own ? "Zurückziehen" : "Löschen", true)) return own ? feedbackSheet() : undefined;
+    await quiet(busy(null, async () => { await S.be.removeRow("feedback", f.id); await reloadPerf(); render(); if (own && S.moreView !== "feedback") feedbackSheet(); }));
+  },
+  fbExport() {
+    download(`feedback_${stamp()}.json`, S.feedback.map(f => ({ datum: f.created_at, von: (person(f.user_id) || {}).display_name || "", art: FB_CAT[f.category], bereich: f.context, nachricht: f.message, status: f.status, antwort: f.admin_note, version: f.app_version, geraet: f.device })));
   },
   goAccount() { closeSheet(); S.tab = "settings"; S.moreView = "settings"; LS.set("la_tab", S.tab); render(); scrollTo(0, 0); },
   coachAway(el) { absageSheet(el.dataset.id, S.me.id); },
@@ -1994,6 +2067,8 @@ async function restoreBackup(data) {
     await S.be.upsert("test_results", (tables.test_results || []).filter(keepUser).map(r => fixRef(r, "entered_by")));
     await S.be.upsert("calendar_entries", (tables.calendar_entries || []).map(c => fixRef(c, "created_by")));
     await S.be.upsert("competition_results", (tables.competition_results || []).filter(keepUser).map(c => fixRef(c, "entered_by")));
+    await S.be.upsert("week_openings", (tables.week_openings || []).map(w => fixRef(w, "opened_by")));
+    await S.be.upsert("feedback", (tables.feedback || []).filter(keepUser));
   }
   const rows = data.profiles.slice().sort((a, b) => (b.role === "admin") - (a.role === "admin"));
   for (const p of rows) {
