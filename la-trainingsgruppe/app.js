@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "18.11.2026 · 9";
+const VERSION = "19.11.2026 · 12";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -92,10 +92,10 @@ function setPref(k, v) { prefs[k] = v; LS.set("la_prefs", prefs); applyPrefs(); 
 
 /* ───────────── Backend: Supabase ───────────── */
 const BACKUP_TABLES = ["plan_groups", "plans", "plan_sheets", "exercises", "sessions", "session_weeks", "attendance", "attendance_private", "attendance_log",
-  "test_types", "norms", "athlete_info", "injuries", "test_results", "calendar_entries", "competition_results", "week_openings", "feedback"];
-const CONFLICT = { attendance: "session_id,user_id", attendance_private: "session_id,user_id", session_weeks: "week_start", athlete_info: "user_id", week_openings: "week_start" };
-const INSERT_ONLY = new Set(["session_weeks", "week_openings", "attendance_log"]); // nur ergänzen, nie überschreiben
-const ORDER = { feedback: ["created_at"], test_types: ["sort_order", "name"], calendar_entries: ["start_date"], test_results: ["test_date"], competition_results: ["comp_date"], injuries: ["start_date"] };
+  "test_types", "norms", "athlete_info", "injuries", "test_results", "calendar_entries", "competition_results", "week_openings", "feedback", "attendance_weekly", "competition_entries"];
+const CONFLICT = { competition_entries: "entry_id,user_id", attendance_weekly: "user_id,week_start", attendance: "session_id,user_id", attendance_private: "session_id,user_id", session_weeks: "week_start", athlete_info: "user_id", week_openings: "week_start" };
+const INSERT_ONLY = new Set(["session_weeks", "week_openings", "attendance_log", "attendance_weekly"]); // nur ergänzen, nie überschreiben
+const ORDER = { attendance_weekly: ["week_start"], feedback: ["created_at"], test_types: ["sort_order", "name"], calendar_entries: ["start_date"], test_results: ["test_date"], competition_results: ["comp_date"], injuries: ["start_date"] };
 
 function makeSupabaseBackend(url, key) {
   const sb = window.supabase.createClient(url, key, {
@@ -137,6 +137,7 @@ function makeSupabaseBackend(url, key) {
       return p;
     },
     async deletePlan(id) { ok(await T("plans").delete().eq("id", id)); },
+    async updateSheet(id, patch) { return ok(await T("plan_sheets").update(patch).eq("id", id).select().single()); },
     // Übungen
     async exercises() { return ok(await T("exercises").select("*").order("name")); },
     async saveExercise(row) {
@@ -169,6 +170,21 @@ function makeSupabaseBackend(url, key) {
     async openings() { return (ok(await T("week_openings").select("week_start"))).map(r => r.week_start); },
     async openWeek(monday, open) { ok(await sb.rpc("open_week", { p_week: monday, p_open: open })); },
     async changeEmail(email) { ok(await sb.auth.updateUser({ email }, { emailRedirectTo: appUrl() })); },
+    async setInvites(entryId, ids, status) {
+      const cur = ok(await T("competition_entries").select("*").eq("entry_id", entryId));
+      const drop = cur.filter(c => !ids.includes(c.user_id)).map(c => c.user_id);
+      if (drop.length) ok(await T("competition_entries").delete().eq("entry_id", entryId).in("user_id", drop));
+      const add = ids.filter(u => !cur.some(c => c.user_id === u)).map(u => ({ entry_id: entryId, user_id: u }));
+      if (add.length) ok(await T("competition_entries").insert(add));
+      for (const c of cur) if (ids.includes(c.user_id) && status[c.user_id] && status[c.user_id] !== c.status)
+        ok(await T("competition_entries").update({ status: status[c.user_id], updated_at: new Date().toISOString() }).eq("entry_id", entryId).eq("user_id", c.user_id));
+    },
+    async answerInvite(entryId, status) { ok(await sb.rpc("answer_competition", { p_entry: entryId, p_status: status })); },
+    async feedbackBoard() { return ok(await sb.rpc("feedback_board")) || []; },
+    async voteFeedback(id, on) {
+      if (on) ok(await T("feedback_votes").upsert({ feedback_id: id, user_id: S.me.id }, { onConflict: "feedback_id,user_id", ignoreDuplicates: true }));
+      else ok(await T("feedback_votes").delete().eq("feedback_id", id).eq("user_id", S.me.id));
+    },
     // Allgemeine Tabellen (Leistung, Kalender)
     async list(table) { let q = T(table).select("*"); (ORDER[table] || []).forEach(c => { q = q.order(c); }); return ok(await q); },
     async saveRow(table, row) {
@@ -198,7 +214,8 @@ function makeSupabaseBackend(url, key) {
 function demoSeed() {
   const now = new Date().toISOString(), mon = mondayOf(todayIso());
   const g = (id, name, s) => ({ id, name, sort_order: s });
-  const p = (id, display_name, role, approved, plan_group_id) => ({ id, display_name, role, approved, plan_group_id, created_at: now });
+  const joined = new Date(Date.now() - 200 * 864e5).toISOString();
+  const p = (id, display_name, role, approved, plan_group_id) => ({ id, display_name, role, approved, plan_group_id, created_at: approved ? joined : now });
   const it = (text, ...details) => ({ text, details });
   const day = (d, info, title, items) => ({ day: d, info, title, titleDetails: [], items });
   const days = sprint => [
@@ -252,8 +269,10 @@ function demoSeed() {
     week_openings: [{ week_start: addDays(mon, -7) }, { week_start: mon }],
     feedback: [
       { id: "f1", user_id: "u3", category: "fehler", message: "Beim Absagen springt die Seite nach oben.", context: "Termine", app_version: "Demo", device: "iPhone", status: "neu", admin_note: "", created_at: new Date(Date.now() - 3600000).toISOString() },
-      { id: "f2", user_id: "u-trainer", category: "idee", message: "Es wäre gut, beim Plan eine Notiz für die ganze Woche zu haben.", context: "Plan", app_version: "Demo", device: "", status: "erledigt", admin_note: "Kommt in der nächsten Version.", created_at: new Date(Date.now() - 86400000).toISOString() }
-    ]
+      { id: "f2", user_id: "u-trainer", category: "idee", message: "Es wäre gut, beim Plan eine Notiz für die ganze Woche zu haben.", context: "Plan", app_version: "Demo", device: "", status: "erledigt", admin_note: "Kommt in der nächsten Version.", created_at: new Date(Date.now() - 86400000).toISOString() },
+      { id: "f3", user_id: "u4", category: "idee", message: "Eine Erinnerung, wenn die Anmeldung für die nächste Woche offen ist, wäre super.", context: "Termine", app_version: "Demo", device: "Android", status: "neu", admin_note: "", created_at: new Date(Date.now() - 2 * 86400000).toISOString() }
+    ],
+    feedback_votes: [{ feedback_id: "f1", user_id: "u4" }, { feedback_id: "f1", user_id: "u-trainer" }, { feedback_id: "f3", user_id: "u3" }]
   };
 }
 
@@ -266,7 +285,9 @@ const DEMO_RULES = (() => {
     norms: { read: "member", defaults: { group_id: null }, canWrite: staffOnly },
     test_results: { read: "staffSelf", defaults: { note: "", value_left: null, value_right: null, entered_by: null },
       canWrite: (n, o, c) => c.staff || (n.user_id === c.me && c.test && c.test.entry === "self" && (!o || o.entered_by === c.me)) },
-    calendar_entries: { read: "member", defaults: { end_date: null, location: "", note: "" }, canWrite: staffOnly },
+    calendar_entries: { read: "member", defaults: { end_date: null, location: "", note: "", keep: false }, canWrite: staffOnly },
+    competition_entries: { read: "staffSelf", defaults: { status: "angefragt" }, canWrite: (n, o, c) => c.staff },
+    attendance_weekly: { read: "staffSelf", defaults: { reasons: {} }, canWrite: () => false },
     feedback: { read: "adminSelf", defaults: { category: "idee", context: "", app_version: "", device: "", status: "neu", admin_note: "" },
       canWrite: (n, o, c) => c.admin || (n.user_id === c.me && (!o || (o.status === n.status && o.admin_note === n.admin_note))) },
     competition_results: { read: "member", defaults: { entry_id: null, place: "", wind: "", note: "", better: "lower", entered_by: null },
@@ -307,19 +328,48 @@ function demoPerformance(db) {
   db.calendar_entries = [
     C("c1", "phase", "Allgemeine Vorbereitung", d(70), d(-20), ""), C("c2", "phase", "Hallensaison", d(-21), d(-110), ""),
     C("c3", "testwoche", "Testwoche", d(6), d(1), ""), C("c4", "wettkampf", "Hallen-Meeting Leverkusen", d(-31), null, "Leverkusen"),
-    C("c5", "wettkampf", "NRW Hallenmeisterschaften", d(-66), d(-65), "Dortmund"), C("c6", "testwoche", "Testwoche", d(-56), d(-50), "")
+    C("c5", "wettkampf", "NRW Hallenmeisterschaften", d(-66), d(-65), "Dortmund"), C("c6", "testwoche", "Testwoche Herbst", d(56), d(50), "")
+  ];
+  db.competition_entries = [
+    { entry_id: "c4", user_id: "u2", status: "zugesagt" }, { entry_id: "c4", user_id: "u3", status: "angefragt" },
+    { entry_id: "c5", user_id: "u1", status: "angefragt" }, { entry_id: "c5", user_id: "u2", status: "angefragt" }, { entry_id: "c5", user_id: "u4", status: "abgesagt" }
   ];
   db.competition_results = [
-    { id: "w1", user_id: "u2", entry_id: null, comp_date: d(150), comp_name: "Sportfest Köln", discipline: "100m", result: "10,92", value: 10.92, better: "lower", place: "2", wind: "+0,8", note: "", entered_by: "u2" },
+    { id: "w1", user_id: "u2", entry_id: null, comp_date: d(150), comp_name: "Sportfest Köln", discipline: "100m", result: "10,92", value: 10.92, better: "lower", place: "2", wind: "+0,8", note: "", entered_by: "u2", is_pb: true },
     { id: "w2", user_id: "u2", entry_id: null, comp_date: d(110), comp_name: "Kreismeisterschaften", discipline: "100m", result: "10,85", value: 10.85, better: "lower", place: "1", wind: "+1,2", note: "", entered_by: "u2" },
     { id: "w3", user_id: "u3", entry_id: null, comp_date: d(110), comp_name: "Kreismeisterschaften", discipline: "400m", result: "57,80", value: 57.8, better: "lower", place: "3", wind: "", note: "", entered_by: "u3" }
   ];
   return db;
 }
 
+// wie compact_attendance() in Teil 6: Trainings älter als 14 Tage → Wochenstatistik, danach löschen
+function demoCompact(db) {
+  const cutoff = addDays(todayIso(), -14), old = db.sessions.filter(s => s.session_date < cutoff);
+  if (!old.length) return;
+  db.attendance_weekly = db.attendance_weekly || [];
+  const people = db.profiles.filter(p => p.approved && (p.trains == null ? p.role === "athlete" : p.trains));
+  old.filter(s => !s.cancelled).forEach(s => people.forEach(p => {
+    if (String(p.created_at || "").slice(0, 10) > s.session_date) return;
+    const wk = mondayOf(s.session_date);
+    let w = db.attendance_weekly.find(x => x.user_id === p.id && x.week_start === wk);
+    if (!w) { w = { user_id: p.id, week_start: wk, counted: 0, attended: 0, n_yes: 0, n_no: 0, n_open: 0, n_late: 0, n_no_show: 0, n_flipped: 0, n_skipped: 0, reasons: {} }; db.attendance_weekly.push(w); }
+    const inj = (db.injuries || []).some(i => i.user_id === p.id && i.exclude_attendance && i.start_date <= s.session_date && (!i.end_date || i.end_date >= s.session_date));
+    if (inj) { w.n_skipped++; return; }
+    const a = db.attendance.find(x => x.session_id === s.id && x.user_id === p.id) || {}, pr = db.attendance_private.find(x => x.session_id === s.id && x.user_id === p.id);
+    w.counted++;
+    if ((a.status === "yes" && a.coach_mark !== "no_show") || a.coach_mark === "late") w.attended++;
+    if (a.status === "yes") w.n_yes++; else if (a.status === "no") { w.n_no++; const k = (pr && pr.reason) || "ohne Angabe"; w.reasons[k] = (w.reasons[k] || 0) + 1; } else w.n_open++;
+    if (a.coach_mark === "late") w.n_late++;
+    if (a.coach_mark === "no_show") w.n_no_show++;
+    if (a.status === "no" && db.attendance_log.some(l => l.session_id === s.id && l.user_id === p.id && l.status === "yes")) w.n_flipped++;
+  }));
+  const ids = new Set(old.map(s => s.id));
+  db.sessions = db.sessions.filter(s => !ids.has(s.id));
+  ["attendance", "attendance_private", "attendance_log"].forEach(k => db[k] = db[k].filter(r => !ids.has(r.session_id)));
+}
 function demoAutoOpen(settings, monday) { return autoOpenAt(settings, monday); }
 function makeDemoBackend() {
-  const KEY = "la_demo_db_v5";
+  const KEY = "la_demo_db_v9";
   let db = LS.get(KEY, null) || demoPerformance(demoSeed());
   const save = () => LS.set(KEY, db);
   const me = () => LS.get("la_demo_user", "u-admin");
@@ -393,13 +443,14 @@ function makeDemoBackend() {
     async planSheets(planId) {
       needMember();
       const mine = (meRow() || {}).plan_group_id;
-      return clone(db.plan_sheets.filter(s => s.plan_id === planId && (staff() || db.settings.plan_visibility === "all" || s.group_id === mine)).sort((a, b) => a.sort_order - b.sort_order));
+      return clone(db.plan_sheets.filter(s => s.plan_id === planId && (staff() || db.settings.plan_visibility === "all" || s.group_id === mine || (s.user_ids || []).includes(me()))).sort((a, b) => a.sort_order - b.sort_order));
     },
     async savePlan(plan, sheets) {
       needStaff();
       const p = Object.assign({ id: uid(), created_at: now(), created_by: me() }, plan); db.plans.push(p);
       sheets.forEach(s => db.plan_sheets.push(Object.assign({ id: uid() }, s, { plan_id: p.id }))); save(); return clone(p);
     },
+    async updateSheet(id, patch) { needStaff(); const s = db.plan_sheets.find(x => x.id === id); Object.assign(s, patch); save(); return clone(s); },
     async deletePlan(id) { needStaff(); db.plans = db.plans.filter(p => p.id !== id); db.plan_sheets = db.plan_sheets.filter(s => s.plan_id !== id); save(); },
     async exercises() { needMember(); return clone(db.exercises.slice().sort((a, b) => a.name.localeCompare(b.name, "de"))); },
     async saveExercise(row) {
@@ -424,6 +475,7 @@ function makeDemoBackend() {
     async deleteVideo() {},
     async ensureWeek(monday) {
       needMember();
+      demoCompact(db); save();
       if (db.session_weeks.some(w => w.week_start === monday)) return;
       db.session_weeks.push({ week_start: monday });
       (db.settings.session_template || []).forEach(t => db.sessions.push({ id: uid(), session_date: addDays(monday, t.dow - 1), start_time: t.time ? t.time + ":00" : null, title: "Training", location: t.location || "", note: "", cancelled: false, created_at: now() }));
@@ -472,6 +524,27 @@ function makeDemoBackend() {
       if (open) db.week_openings.push({ week_start: monday, opened_at: now() }); save();
     },
     async changeEmail() { deny("Im Demo-Modus gibt es keine E-Mail-Adressen."); },
+    async setInvites(entryId, ids, status) {
+      needStaff(); db.competition_entries = db.competition_entries || [];
+      db.competition_entries = db.competition_entries.filter(c => c.entry_id !== entryId || ids.includes(c.user_id));
+      ids.forEach(u => { const c = db.competition_entries.find(x => x.entry_id === entryId && x.user_id === u);
+        if (!c) db.competition_entries.push({ entry_id: entryId, user_id: u, status: "angefragt", updated_at: now() }); else if (status[u]) c.status = status[u]; });
+      save();
+    },
+    async answerInvite(entryId, st) {
+      needMember(); const c = (db.competition_entries || []).find(x => x.entry_id === entryId && x.user_id === me());
+      if (!c) deny("Du bist für diesen Wettkampf nicht vorgesehen"); c.status = st; save();
+    },
+    async feedbackBoard() {
+      needMember(); const v = db.feedback_votes || [];
+      return clone(db.feedback.slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).map(f => ({
+        id: f.id, category: f.category, message: f.message, context: f.context, status: f.status, admin_note: f.admin_note, created_at: f.created_at,
+        votes: v.filter(x => x.feedback_id === f.id).length, voted: v.some(x => x.feedback_id === f.id && x.user_id === me()), mine: f.user_id === me() })));
+    },
+    async voteFeedback(id, on) {
+      needMember(); db.feedback_votes = (db.feedback_votes || []).filter(x => !(x.feedback_id === id && x.user_id === me()));
+      if (on) db.feedback_votes.push({ feedback_id: id, user_id: me(), created_at: now() }); save();
+    },
     async setMark(sid, user, mark) {
       if (!staff()) deny("Nur Trainer und Admins können markieren");
       let a = db.attendance.find(x => x.session_id === sid && x.user_id === user);
@@ -482,7 +555,8 @@ function makeDemoBackend() {
     },
     async list(table) {
       needMember(); const R = DEMO_RULES[table]; const rows = db[table] || [];
-      const vis = rows.filter(r => R.read === "member" || (R.read === "adminSelf" ? myRole() === "admin" : staff()) || r.user_id === me());
+      let vis = rows.filter(r => R.read === "member" || (R.read === "adminSelf" ? myRole() === "admin" : staff()) || r.user_id === me());
+      if (table === "calendar_entries" && !staff()) vis = vis.filter(e => e.kind !== "wettkampf" || (db.competition_entries || []).some(c => c.entry_id === e.id && c.user_id === me()));
       const ord = ORDER[table] || [];
       return clone(vis.slice().sort((a, b) => { for (const k of ord) { const c = String(a[k] ?? "").localeCompare(String(b[k] ?? ""), "de", { numeric: true }); if (c) return c; } return 0; }));
     },
@@ -506,6 +580,7 @@ function makeDemoBackend() {
       needMember(); const R = DEMO_RULES[table]; const old = (db[table] || []).find(r => r.id === id);
       if (!old || !R.canWrite(old, old, { me: me(), staff: staff(), admin: myRole() === "admin", test: db.test_types.find(t => t.id === old.test_id), del: true })) deny();
       db[table] = db[table].filter(r => r.id !== id);
+      if (table === "calendar_entries") db.competition_entries = (db.competition_entries || []).filter(c => c.entry_id !== id);
       if (table === "test_types") { db.norms = db.norms.filter(r => r.test_id !== id); db.test_results = db.test_results.filter(r => r.test_id !== id); }
       save();
     },
@@ -525,10 +600,10 @@ const S = {
   be: null, user: null, me: null, profiles: [], emails: {}, groups: [], settings: null,
   plans: [], sheetCache: {}, exercises: [], sessions: [], att: [], priv: [], log: [],
   tab: LS.get("la_tab", "start"), authMode: "login", authMsg: null, recovery: false, loadError: null,
-  planView: "week", planWeek: null, planSheet: LS.get("la_sheet", null), exSearch: "", showPast: false, scrolledToday: false,
+  planView: "week", planWeek: null, sheetChoice: {}, exSearch: "", showPast: false, scrolledToday: false,
   tests: [], norms: [], results: [], ainfo: [], injuries: [], calendar: [], comps: [],
   stats: { loaded: false }, statRange: "4w", statSort: "name", perfView: null, enterTest: null, enterDate: null,
-  termView: "training", moreView: "team", showPastCal: false, openings: [], feedback: [], fbFilter: "neu"
+  termView: "training", moreView: "team", showPastCal: false, openings: [], feedback: [], fbBoard: [], fbDraft: "", fbFilter: "neu", compEntries: []
 };
 if (S.tab === "team") S.tab = "settings";
 const role = () => S.me && S.me.role;
@@ -587,10 +662,13 @@ async function sheetsOf(plan) {
   if (!S.sheetCache[plan.id]) S.sheetCache[plan.id] = await S.be.planSheets(plan.id);
   return S.sheetCache[plan.id];
 }
+const sheetIsMine = s => (s.user_ids || []).includes(S.me.id);
 function defaultSheet(sheets) {
   if (!sheets.length) return null;
-  return sheets.find(s => s.name === S.planSheet) || sheets.find(s => s.group_id && s.group_id === S.me.plan_group_id) || sheets[0];
+  const chosen = S.sheetChoice[sheets[0].plan_id];
+  return sheets.find(s => s.id === chosen) || sheets.find(sheetIsMine) || sheets.find(s => s.group_id && s.group_id === S.me.plan_group_id) || sheets[0];
 }
+const sheetFor = s => [s.group_id && groupName(s.group_id), ...(s.user_ids || []).map(u => (person(u) || {}).display_name).filter(Boolean)].filter(Boolean).join(", ");
 const norm = s => String(s || "").toLowerCase().replace(/[\s.:;,/()\-–]+/g, "");
 function findExercise(text) {
   const t = norm(text); if (!t) return null;
@@ -696,7 +774,7 @@ function viewTop() {
 }
 function viewNav() {
   const n = (isStaff() ? pending().length : 0) + (isAdmin() ? S.feedback.filter(f => f.status === "neu").length : 0);
-  const ns = nextSession(), myOpen = ns && trainsP(S.me) && weekOpen(mondayOf(ns.session_date)) && !attOf(ns.id, S.me.id)?.status ? 1 : 0;
+  const ns = nextSession(), myOpen = (ns && trainsP(S.me) && weekOpen(mondayOf(ns.session_date)) && !attOf(ns.id, S.me.id)?.status) || pendingInvites().length ? 1 : 0;
   const b = (id, label, badge) => `<button data-act="tab" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ""}>${ICON[id]}${label}${badge ? `<span class="badge">${badge}</span>` : ""}</button>`;
   return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Plan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("leistung", "Leistung")}${b("settings", "Mehr", n)}</div></nav>`;
 }
@@ -764,6 +842,11 @@ function viewStart() {
   if (inj) html += `<div class="notice"><div class="grow"><b>Gute Besserung!</b> Du bist seit ${dm(inj.start_date)} als verletzt eingetragen.</div></div>`;
   html += `<div class="card hero"><h3>Hallo ${esc(firstName(me.display_name))}!</h3>
       <p style="margin:0">${roleChip(me.role)} ${gname ? `<span class="chip">${esc(gname)}</span>` : ""}</p></div>`;
+  pendingInvites().forEach(e => {
+    html += `<div class="card invcard"><div class="small muted">Wettkampf-Meldung</div><b>${esc(e.title)}</b> <span class="small muted">${fmtDay(e.start_date)}${e.location ? " · " + esc(e.location) : ""}</span>
+      <p class="small" style="margin:6px 0 0">Der Trainer möchte dich melden.</p>
+      <div class="resp"><button data-act="invAnswer" data-id="${esc(e.id)}" data-v="zugesagt">${ICON.check} Ich bin dabei</button><button data-act="invAnswer" data-id="${esc(e.id)}" data-v="abgesagt">${ICON.x} Lieber nicht</button></div></div>`;
+  });
   html += `<h2>Nächstes Training</h2>` + (ns ? sessionCard(ns) : `<div class="card muted">Keine Termine geplant.</div>`);
   // Heute im Plan
   const t = todayIso(), plan = planForWeek(mondayOf(t)), sheets = plan && S.sheetCache[plan.id];
@@ -776,7 +859,7 @@ function viewStart() {
       </button>`;
   }
   const t2 = todayIso(), phase = S.calendar.find(e => e.kind === "phase" && e.start_date <= t2 && (e.end_date || e.start_date) >= t2);
-  const nextComp = S.calendar.filter(e => e.kind !== "phase" && (e.end_date || e.start_date) >= t2).sort((x, y) => x.start_date.localeCompare(y.start_date))[0];
+  const nextComp = S.calendar.filter(e => e.kind !== "phase" && (e.end_date || e.start_date) >= t2 && (e.kind !== "wettkampf" || isStaff() || (myInvite(e.id) || {}).status !== "abgesagt")).sort((x, y) => x.start_date.localeCompare(y.start_date))[0];
   if (phase || nextComp) html += `<h2>Saison</h2><button class="card linkcard" data-act="goSeason">
       ${phase ? `<div class="small muted">Aktuelle Phase</div><b class="daytitle" style="margin:0 0 8px">${esc(phase.title)}${phase.end_date ? ` <span class="small muted">bis ${dm(phase.end_date)}</span>` : ""}</b>` : ""}
       ${nextComp ? `<div class="small muted">Als Nächstes · ${KIND_LABEL[nextComp.kind]}</div><b>${esc(nextComp.title)}</b> <span class="small muted">${fmtDay(nextComp.start_date)} · in ${Math.round((parseIso(nextComp.start_date) - parseIso(t2)) / 864e5)} Tagen</span>` : ""}</button>`;
@@ -785,7 +868,7 @@ function viewStart() {
     html += `<h2>Team</h2><div class="card"><div class="stats">
       <div class="stat"><b>${athletes.length}</b><span>Athleten</span></div>
       <div class="stat"><b>${athletes.filter(p => currentInjury(p.id)).length}</b><span>verletzt</span></div>
-      <div class="stat"><b>${S.exercises.length}</b><span>Übungen</span></div></div></div>`;
+      <div class="stat"><b>${S.profiles.filter(p => p.approved && isCoach(p)).length}</b><span>Trainer</span></div></div></div>`;
   }
   return html;
 }
@@ -811,26 +894,49 @@ function viewPlan() {
     ${plan.goal ? `<div class="small"><span class="muted">Ziel:</span> ${esc(plan.goal)}</div>` : ""}</div>`;
   if (!sheets.length) return html + `<div class="card muted">Für dich ist in diesem Plan kein Blatt freigegeben. Frag deinen Trainer, welcher Trainingsgruppe du zugeordnet bist.</div>`;
   const sh = defaultSheet(sheets);
-  if (sheets.length > 1) html += `<div class="chips" role="tablist">${sheets.map(s => `<button class="chipbtn" data-act="planSheet" data-name="${esc(s.name)}" aria-pressed="${s.id === sh.id}">${esc(s.name)}${s.group_id && s.group_id === S.me.plan_group_id ? " ★" : ""}</button>`).join("")}</div>`;
-  const t = todayIso();
-  html += sh.data.days.map(d => {
-    const date = addDays(mon, d.day), sess = S.sessions.filter(s => s.session_date === date && !s.cancelled);
-    const empty = !d.title && !d.items.length && !d.info;
-    return `<section class="daycard ${date === t ? "today" : ""} ${empty ? "empty" : ""}">
-      <div class="dayhead"><span class="dayname">${WDL[d.day]}</span><span class="muted small">${dm(date)}</span>
-        ${d.info ? `<span class="chip">${esc(d.info)}</span>` : ""}${sess.length ? `<span class="chip solid">Training ${esc(hhmm(sess[0].start_time))}</span>` : ""}</div>
-      ${d.title ? `<div class="daytitle">${esc(d.title)}</div>` : ""}
-      ${(d.titleDetails || []).length ? `<div class="small muted">${d.titleDetails.map(esc).join(" · ")}</div>` : ""}
-      ${d.items.length ? `<ul class="items">${d.items.map((it, k) => {
-        const ex = findExercise(it.text);
-        return `<li class="${it.gap ? "gap" : ""}"><button class="item" data-act="itemInfo" data-text="${esc(it.text)}">
-          <span class="it ${ex ? "known" : ""}">${esc(it.text)}${ex && (ex.video_path || ex.video_url) ? ` <span class="vid">${ICON.video}</span>` : ""}</span>
-          ${it.details.length ? `<span class="det">${it.details.map(esc).join("<br>")}</span>` : ""}</button></li>`;
-      }).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
-    </section>`;
-  }).join("");
+  if (sheets.length > 1) html += `<div class="chips" role="tablist">${sheets.map(s => `<button class="chipbtn" data-act="planSheet" data-id="${esc(s.id)}" aria-pressed="${s.id === sh.id}">${esc(s.name)}${sheetIsMine(s) || (s.group_id && s.group_id === S.me.plan_group_id) ? " ★" : ""}</button>`).join("")}</div>`;
+  if (sheetIsMine(sh)) html += `<div class="notice" style="padding:10px 14px"><div class="grow small"><b>Dein persönlicher Plan</b>${sh.group_id ? "" : " – vom Trainer für dich zugeordnet"}</div></div>`;
+  if (isStaff()) html += `<div class="sheetfor small muted"><span class="grow">Blatt „${esc(sh.name)}“ für: <b>${esc(sheetFor(sh) || "niemanden zugeordnet")}</b></span><button class="linkbtn small" data-act="sheetAssign" data-id="${esc(sh.id)}">Zuordnung ändern</button></div>`;
+  html += renderDays(sh.data.days, mon, true);
   if ((plan.extra_sheets || []).length) html += `<h2>Weitere Blätter</h2>` + plan.extra_sheets.map((x, i) => `<details class="card extra"><summary><b>${esc(x.name)}</b></summary>${gridTable(x.rows)}</details>`).join("");
   return html;
+}
+// Ort/Uhrzeit aus dem Plan und der Termin werden zu einem Chip ("LAA · 17:55")
+const TIME_IN = /\(?\s*\b\d{1,2}[:.]\d{2}\b\s*\)?/g;
+function dayChips(info, sess) {
+  const place = String(info || "").replace(TIME_IN, " ").replace(/\s+/g, " ").trim();
+  if (sess.length) return `<span class="chip solid">${esc([place, hhmm(sess[0].start_time)].filter(Boolean).join(" · "))}</span>`;
+  if (!info) return "";
+  const tm = String(info).match(/\d{1,2}[:.]\d{2}/);
+  return `<span class="chip">${esc(tm && place ? `${place} · ${tm[0].replace(".", ":")}` : info)}</span>`;
+}
+// Blöcke aus Leerzeilen; an Krafttagen je zwei Übungen zusammen (Supersatz)
+function itemGroups(d) {
+  const blocks = [];
+  d.items.forEach(it => { if (!blocks.length || it.gap) blocks.push([]); blocks[blocks.length - 1].push(it); });
+  if (!/kraft/i.test(d.title || "")) return blocks.map(items => ({ items }));
+  const out = [];
+  blocks.forEach(b => { if (b.length === 1) out.push({ items: b }); else for (let i = 0; i < b.length; i += 2) out.push({ items: b.slice(i, i + 2), pair: b.length > 1 && i + 1 < b.length }); });
+  return out;
+}
+function renderDays(days, mon, live) {
+  const t = todayIso();
+  return days.map(d => {
+    const date = addDays(mon, d.day), sess = live ? S.sessions.filter(s => s.session_date === date && !s.cancelled) : [];
+    const empty = !d.title && !d.items.length && !d.info;
+    return `<section class="daycard ${live && date === t ? "today" : ""} ${empty ? "empty" : ""}">
+      <div class="dayhead"><span class="dayname">${WDL[d.day]}</span>${live ? `<span class="muted small">${dm(date)}</span>` : ""}
+        ${dayChips(d.info, sess)}</div>
+      ${d.title ? `<div class="daytitle">${esc(d.title)}</div>` : ""}
+      ${(d.titleDetails || []).length ? `<div class="small muted">${d.titleDetails.map(esc).join(" · ")}</div>` : ""}
+      ${d.items.length ? `<ul class="items">${itemGroups(d).map(g => `<li class="grp ${g.pair ? "pair" : ""}">${g.items.map(it => {
+        const ex = live ? findExercise(it.text) : null;
+        return `<button class="item" ${live ? `data-act="itemInfo" data-text="${esc(it.text)}"` : 'type="button" tabindex="-1"'}>
+          <span class="it ${ex ? "known" : ""}">${esc(it.text)}${ex && (ex.video_path || ex.video_url) ? ` <span class="vid">${ICON.video}</span>` : ""}</span>
+          ${it.details.length ? `<span class="det">${it.details.map(esc).join("<br>")}</span>` : ""}</button>`;
+      }).join("")}</li>`).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
+    </section>`;
+  }).join("");
 }
 function gridTable(rows) {
   const used = rows.filter(r => r.some(Boolean)); if (!used.length) return "";
@@ -900,7 +1006,8 @@ function viewTermine() {
 }
 function viewTraining() {
   const mon = mondayOf(todayIso()), t = todayIso();
-  const upcoming = S.sessions.filter(s => s.session_date >= t);
+  const next = addDays(mon, 7), showNext = isStaff() || weekOpen(next);
+  const upcoming = S.sessions.filter(s => s.session_date >= t && (mondayOf(s.session_date) === mon || (showNext && mondayOf(s.session_date) === next)));
   const past = S.sessions.filter(s => s.session_date < t && s.session_date >= addDays(t, -14)).reverse(); // ältere nur noch in der Statistik
   const byWeek = {};
   upcoming.forEach(s => (byWeek[mondayOf(s.session_date)] = byWeek[mondayOf(s.session_date)] || []).push(s));
@@ -917,18 +1024,44 @@ function viewTraining() {
     html += `<h2>Vergangene Termine</h2>`;
     html += S.showPast ? past.map(s => sessionCard(s)).join("") : `<button class="btn ghost block" data-act="showPast">${past.length} Termine der letzten 2 Wochen anzeigen</button>`;
   }
-  html += `<p class="small muted" style="margin:10px 4px">${isStaff() ? "Ältere Termine werden ausgeblendet und zählen nur noch in der Statistik (Leistung → Übersicht)." : "Absagegründe sehen nur Trainer und Admins. Alle sehen, wer zugesagt hat."}</p>`;
+  html += `<p class="small muted" style="margin:10px 4px">${isStaff() ? "Angezeigt werden diese und nächste Woche. Ältere Termine zählen nur noch in der Statistik (Leistung → Übersicht)." : `${showNext ? "" : "Die nächste Woche erscheint, sobald die Anmeldung geöffnet ist. "}Absagegründe sehen nur Trainer und Admins. Alle sehen, wer zugesagt hat.`}</p>`;
   return html;
 }
 
 /* ───── Mehr: Team + Einstellungen ───── */
 function viewMore() {
   const n = isStaff() ? pending().length : 0, nf = S.feedback.filter(f => f.status === "neu").length;
-  if (S.moreView === "feedback" && !isAdmin()) S.moreView = "team";
+  if ((S.moreView === "feedback" || S.moreView === "help") && !isAdmin()) S.moreView = "team";
   return `<div class="seg" style="margin-bottom:14px"><button data-act="moreView" data-v="team" aria-pressed="${S.moreView === "team"}">Team${n ? ` (${n})` : ""}</button>
     ${isAdmin() ? `<button data-act="moreView" data-v="feedback" aria-pressed="${S.moreView === "feedback"}">Feedback${nf ? ` (${nf})` : ""}</button>` : ""}
-    <button data-act="moreView" data-v="settings" aria-pressed="${S.moreView === "settings"}">Einstellungen</button></div>`
-    + (S.moreView === "settings" ? viewSettings() : S.moreView === "feedback" ? viewFeedbackAdmin() : viewTeam());
+    <button data-act="moreView" data-v="settings" aria-pressed="${S.moreView === "settings" || S.moreView === "help"}">Einstellungen</button></div>`
+    + (S.moreView === "settings" ? viewSettings() : S.moreView === "feedback" ? viewFeedbackAdmin() : S.moreView === "help" ? viewAdminHelp() : viewTeam());
+}
+function viewAdminHelp() {
+  if (!isAdmin()) return `<div class="card muted">Nur für Admins.</div>`;
+  const R = (t, a, tr, ad) => `<tr><td>${t}</td><td>${a ? "✓" : ""}</td><td>${tr ? "✓" : ""}</td><td>${ad ? "✓" : ""}</td></tr>`;
+  return `<div class="btns" style="margin:0 0 10px"><button class="btn ghost" data-act="moreView" data-v="settings">← Zurück zu den Einstellungen</button></div>
+  <div class="card helptext"><h3>Admin-Handbuch</h3><p class="small muted">Nur für Admins sichtbar.</p>
+  <h4>Rollen</h4><div class="tablewrap"><table class="grid roles"><tr><th></th><th>Athlet</th><th>Trainer</th><th>Admin</th></tr>
+    ${R("Wochenplan ansehen, zu-/absagen, eigene Werte", 1, 1, 1)}${R("Übungen anlegen, Wettkampfergebnisse eintragen", 1, 1, 1)}
+    ${R("Absagegründe, Verlauf, Statistik sehen", 0, 1, 1)}${R("Freischalten, Gruppen zuordnen, Plan hochladen", 0, 1, 1)}
+    ${R("Woche öffnen, Termine, Tests, Normen, Verletzungen", 0, 1, 1)}${R("Rollen vergeben, Teamname, Backup, Feedback", 0, 0, 1)}</table></div>
+  <h4>Neue Mitglieder</h4><p>Wer den Link hat, kann sich registrieren, sieht aber nichts, bis ein Trainer oder Admin ihn unter <b>Mehr → Team</b> freischaltet. Schalte nur Leute frei, die du kennst. Trainer bekommen ihre Rolle im Profil (Name antippen → Rolle).</p>
+  <h4>Trainingsanmeldung</h4><p>Athleten können erst zu-/absagen, wenn die Woche geöffnet ist („Jetzt öffnen“ unter Termine, oder automatisch unter Einstellungen → Trainingsanmeldung). Trainer sagen nicht zu, können aber „Ich bin nicht da“ eintragen. Wer als Admin/Trainer selbst trainiert, setzt in „Mein Konto“ den Haken „Ich trainiere selbst mit“.</p>
+  <h4>Alte Trainings</h4><p>Trainings, die älter als 14 Tage sind, werden automatisch zu einer Wochenstatistik pro Person zusammengefasst (zugesagt, abgesagt, keine Antwort, zu spät, nicht erschienen, umentschieden, Anzahl je Absagegrund). Danach werden die einzelnen Termine samt Absagegründen und Freitext gelöscht. Die Statistik bleibt vollständig, gespeichert wird aber nur das Nötigste.</p>
+  <h4>Wettkämpfe melden</h4><p>Beim Anlegen eines Wettkampfs (Termine → Saison & Wettkämpfe → + Eintrag) wählt der Trainer aus, wen er melden möchte. Nur diese Personen sehen den Wettkampf. Sie bekommen auf der Startseite eine Anfrage und sagen zu oder ab. Absprachen laufen über WhatsApp. Danach kann der Trainer die Teilnehmer und Antworten jederzeit anpassen.</p>
+  <h4>Übungsvideos</h4><p>Ein Handyvideo von 20–30 s hat schnell 30–60 MB, der kostenlose Speicher fasst 1 GB. Besser: das Video auf YouTube als <b>„nicht gelistet“</b> hochladen und den Link bei der Übung eintragen. Es wird direkt in der App abgespielt und braucht bei uns keinen Speicher. „Privat“ geht nicht, denn private Videos kann nur der Besitzer sehen.</p>
+  <h4>Datenmenge</h4><p>Die kostenlose Supabase-Stufe hat 500 MB Datenbank und 1 GB für Videos. Eine Trainingsgruppe mit 25 Personen braucht pro Jahr grob 1–3 MB: Wochenpläne etwa 20 KB pro Upload, Testwerte und Wochenstatistik nur wenige KB. Das reicht für viele Jahre. Platz brauchen nur hochgeladene Videos, rund 5–30 MB pro Clip.</p>
+  <h4>Backup</h4><p>Supabase macht in der kostenlosen Stufe keine automatischen Backups. Lade regelmäßig unter Einstellungen → Admin → Backup eine Sicherung herunter. Videos sind nicht enthalten.</p>
+  <h4>Supabase pausiert</h4><p>Nach etwa 7 Tagen ohne Nutzung pausiert das kostenlose Projekt (z. B. in den Ferien). Dann im Supabase-Dashboard auf <b>Restore</b> klicken. Die Daten bleiben erhalten.</p>
+  <h4>Datenschutz und Sicherheit</h4>
+  <p>Im öffentlichen GitHub-Repository liegt nur der <b>Programmcode</b>, keine Daten. Konten, Pläne, Zu-/Absagen, Testwerte, Verletzungen und Feedback liegen nur in der Supabase-Datenbank.</p>
+  <p>Die Project URL und der publishable Key in <code>config.js</code> sind öffentlich. Ohne freigeschaltetes Konto kommt man trotzdem an nichts heran, weil die Datenbank die Rechte bei jeder Anfrage selbst prüft.</p>
+  <p>Der <b>secret- bzw. service_role-Key</b> aus Supabase umgeht alle Regeln. Er gehört nie ins Repo, in die App oder in einen Chat.</p>
+  <p>Verletzungen sind Gesundheitsdaten. Sichtbar sind sie nur für Trainer, Admins und die Person selbst. Sag neuen Mitgliedern kurz, was gespeichert wird und wer es sieht.</p>
+  <h4>Updates</h4><p>Bei einer neuen Version <code>supabase/alles_in_einem.sql</code> <b>vor</b> dem Mergen komplett im Supabase SQL Editor ausführen. Die Datei darf beliebig oft laufen, vorhandene Daten bleiben erhalten. Danach in der App unter Einstellungen → Version → Aktualisieren.</p>
+  </div>
+  <div class="card helptext">${planFormatHtml()}</div>`;
 }
 const FB_CAT = { fehler: "Fehler", idee: "Idee", sonstiges: "Sonstiges" };
 const TAB_LABEL = { start: "Start", plan: "Plan", termine: "Termine", leistung: "Leistung", settings: "Mehr" };
@@ -936,7 +1069,7 @@ function fbItem(f, admin) {
   const who = (person(f.user_id) || {}).display_name || "Unbekannt";
   const when = new Date(f.created_at).toLocaleString("de-DE", { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" });
   return `<div class="fbitem ${f.status}"><div class="fbhead"><span class="kind ${f.category === "fehler" ? "wettkampf" : ""}">${FB_CAT[f.category] || f.category}</span>
-      <span class="grow small muted">${admin ? esc(who) + " · " : ""}${esc(when)}${f.context ? " · " + esc(f.context) : ""}</span>
+      <span class="grow small muted">${admin ? esc(who) + " · " : ""}${esc(when)}${f.context ? " · " + esc(f.context) : ""}${admin && votesOf(f.id) ? ` · <b>${votesOf(f.id)}× ich auch</b>` : ""}</span>
       ${f.status === "erledigt" ? '<span class="chip ok">✓ erledigt</span>' : '<span class="chip">neu</span>'}</div>
     <p class="pre" style="margin:8px 0">${esc(f.message)}</p>
     ${f.admin_note ? `<div class="small awayline"><b>Antwort:</b> ${esc(f.admin_note)}</div>` : ""}
@@ -944,6 +1077,33 @@ function fbItem(f, admin) {
       <button class="btn sm ${f.status === "neu" ? "" : "ghost"}" data-act="fbStatus" data-id="${esc(f.id)}" data-v="${f.status === "neu" ? "erledigt" : "neu"}">${f.status === "neu" ? "Erledigt" : "Wieder öffnen"}</button>
       <button class="iconbtn" data-act="fbDelete" data-id="${esc(f.id)}" aria-label="Löschen">${ICON.trash}</button></div>`
       : `<div class="btns"><button class="btn sm ghost" data-act="fbDelete" data-id="${esc(f.id)}">Zurückziehen</button></div>`}</div>`;
+}
+const votesOf = id => ((S.fbBoard || []).find(b => b.id === id) || {}).votes || 0;
+// Ähnlichkeit zum Entwurf: gemeinsame Wörter (ab 4 Buchstaben, Wortanfang reicht, damit „Absagen“ auch „absage“ trifft)
+const fbWords = t => [...new Set(String(t).toLowerCase().replace(/[^a-zäöüß0-9 ]+/g, " ").split(/\s+/).filter(w => w.length >= 4).map(w => w.slice(0, 5)))];
+const FB_STOP = new Set(["wenn", "dass", "eine", "einen", "einem", "einer", "nicht", "beim", "wäre", "ware", "auch", "noch", "aber", "oder", "sind", "habe", "kann", "dann", "schon", "immer", "mehr", "sich", "werd", "wird", "würde", "diese", "diese", "für", "über", "nach", "bitte", "gerne", "gern", "mein", "meine"].map(w => w.slice(0, 5)));
+function fbSimilarity(msg, draft) { const d = fbWords(draft).filter(w => !FB_STOP.has(w)); if (!d.length) return 0; const m = new Set(fbWords(msg)); return d.filter(w => m.has(w)).length; }
+function fbBoardItem(b, similar) {
+  const when = new Date(b.created_at).toLocaleDateString("de-DE", { day: "numeric", month: "numeric" });
+  return `<div class="fbitem ${b.status}"><div class="fbhead"><span class="kind ${b.category === "fehler" ? "wettkampf" : ""}">${FB_CAT[b.category] || b.category}</span>
+      <span class="grow small muted">${esc(when)}${b.context ? " · " + esc(b.context) : ""}${b.mine ? " · von dir" : ""}</span>
+      ${similar ? '<span class="chip">ähnlich</span>' : ""}${b.status === "erledigt" ? '<span class="chip ok">✓ erledigt</span>' : ""}</div>
+    <p class="pre" style="margin:8px 0">${esc(b.message)}</p>
+    ${b.admin_note ? `<div class="small awayline"><b>Antwort:</b> ${esc(b.admin_note)}</div>` : ""}
+    <div class="btns fbvote">${b.mine ? `<span class="small muted grow">${b.votes ? `${b.votes}× „Ich auch“` : ""}</span><button class="btn sm ghost" data-act="fbDelete" data-id="${esc(b.id)}">Zurückziehen</button>`
+      : b.status === "erledigt" ? (b.votes ? `<span class="small muted">${b.votes}× „Ich auch“</span>` : "")
+      : `<button class="btn sm ${b.voted ? "" : "ghost"}" data-act="fbVote" data-id="${esc(b.id)}" aria-pressed="${b.voted}">${b.voted ? "✓ Ich auch" : "Ich auch"}${b.votes ? ` · ${b.votes}` : ""}</button>`}</div></div>`;
+}
+function fbBoardHtml() {
+  const all = S.fbBoard || [];
+  if (!all.length) return `<p class="small muted">Noch nichts gemeldet – du bist die oder der Erste.</p>`;
+  // Eigene Meldungen bleiben immer sichtbar, damit man die Antwort des Admins sieht
+  const scored = all.filter(b => b.status !== "erledigt" || b.mine).map(b => ({ b, s: fbSimilarity(b.message, S.fbDraft) }));
+  const sim = scored.filter(x => x.s > 0).sort((a, b) => b.s - a.s), rest = scored.filter(x => !x.s).sort((a, b) => b.b.votes - a.b.votes || String(b.b.created_at).localeCompare(String(a.b.created_at)));
+  const done = all.filter(b => b.status === "erledigt" && !b.mine);
+  return `${sim.length ? `<p class="small" style="margin:0 0 8px"><b>Klingt ähnlich wie deine Nachricht.</b> Ist es dasselbe? Dann reicht „Ich auch“.</p>` : ""}
+    ${sim.length + rest.length ? `<div class="card flush">${sim.map(x => fbBoardItem(x.b, true)).join("")}${rest.map(x => fbBoardItem(x.b, false)).join("")}</div>` : `<p class="small muted">Gerade ist nichts offen.</p>`}
+    ${done.length ? `<details class="fbdone"><summary class="small">Schon erledigt (${done.length})</summary><div class="card flush">${done.map(b => fbBoardItem(b, false)).join("")}</div></details>` : ""}`;
 }
 function viewFeedbackAdmin() {
   const list = S.feedback.filter(f => S.fbFilter === "all" || f.status === S.fbFilter);
@@ -953,14 +1113,16 @@ function viewFeedbackAdmin() {
     <div class="btns"><button class="btn ghost" data-act="fbExport">Als Datei herunterladen</button></div>`;
 }
 function feedbackSheet() {
-  const mine = S.feedback.filter(f => f.user_id === S.me.id);
-  sheet(`<h3>Feedback zur Beta</h3><p class="small muted">Was funktioniert nicht, was fehlt, was ist umständlich? Deine Nachricht sieht nur der Admin.</p>
+  S.fbDraft = "";
+  const open = (S.fbBoard || []).filter(b => b.status !== "erledigt").length;
+  sheet(`<h3>Feedback zur Beta</h3><p class="small muted">Was funktioniert nicht, was fehlt, was ist umständlich? Unten siehst du, was schon gemeldet wurde – ohne Namen. Wer etwas geschickt hat, sieht nur der Admin.</p>
     <form data-form="feedback">
       <div class="seg" role="radiogroup" style="margin-bottom:12px">${Object.entries(FB_CAT).map(([v, l], i) => `<label class="segopt"><input type="radio" name="cat" value="${v}" ${i === 0 ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
-      <label class="f"><span>Nachricht</span><textarea name="msg" rows="5" maxlength="2000" required placeholder="z. B. Beim Absagen am Handy springt die Seite nach oben."></textarea>
+      <label class="f"><span>Nachricht</span><textarea name="msg" rows="5" maxlength="2000" required data-input="fbSimilar" placeholder="z. B. Beim Absagen am Handy springt die Seite nach oben."></textarea>
         <div class="hint">Mitgeschickt wird automatisch: Bereich „${esc(TAB_LABEL[S.tab] || S.tab)}“, App-Version und Gerätetyp.</div></label>
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Senden</button></div></form>
-    ${mine.length ? `<h3 style="font-size:1.05rem;margin-top:18px">Deine Rückmeldungen</h3><div class="card flush">${mine.map(f => fbItem(f, false)).join("")}</div>` : ""}`);
+    <h3 style="font-size:1.05rem;margin-top:18px">Schon gemeldet${open ? ` (${open} offen)` : ""}</h3>
+    <div id="fb-board">${fbBoardHtml()}</div>`);
 }
 /* ───── Team ───── */
 function memberRow(p) {
@@ -1044,6 +1206,8 @@ function viewSettings() {
       <label class="opt"><input type="checkbox" data-change="betaToggle" ${s.beta !== false ? "checked" : ""}><span><b>Beta-Phase</b><span class="small muted">Zeigt „Beta“ in der Kopfzeile. Ein Tipp darauf öffnet das Feedback-Formular.</span></span></label>
       <form data-form="teamname"><label class="f"><span>Name der Trainingsgruppe</span><input type="text" name="name" required maxlength="60" value="${esc(s.team_name || "")}"></label>
       <button class="btn sm ghost">Speichern</button></form></div>
+      <div class="card"><h3>Admin-Handbuch</h3><p class="small muted">Rollen, Abläufe, Datenschutz, Datenmenge, Supabase. Nur für Admins sichtbar.</p>
+      <button class="btn ghost" data-act="moreView" data-v="help">Handbuch öffnen</button></div>
       <div class="card"><h3>Backup</h3>
       <p class="small muted">Sichert Einstellungen, Trainingsgruppen, Rollen, Pläne, Übungen, Termine und Zu-/Absagen als Datei. Videos sind nicht enthalten. Beim Wiederherstellen werden diese Werte zurückgeschrieben; Konten werden dabei weder angelegt noch gelöscht.</p>
       <div class="btns"><button class="btn" data-act="backup">Backup herunterladen</button>
@@ -1119,10 +1283,16 @@ function normStatus(u) {
   return { met, total, missing, exempt };
 }
 function attendanceStats(u, sessions, att) {
-  const t = todayIso(), hm = nowHm();
+  const t = todayIso(), hm = nowHm(), joined = String((person(u) || {}).created_at || "").slice(0, 10);
   const res = { counted: 0, attended: 0, yes: 0, no: 0, open: 0, late: 0, noShow: 0, flipped: 0, excluded: 0, reasons: {} };
+  (S.stats.weekly || []).filter(w => w.user_id === u && w.week_start >= mondayOf(S.stats.from || t)).forEach(w => {
+    res.counted += w.counted; res.attended += w.attended; res.yes += w.n_yes; res.no += w.n_no; res.open += w.n_open;
+    res.late += w.n_late; res.noShow += w.n_no_show; res.flipped += w.n_flipped; res.excluded += w.n_skipped;
+    Object.entries(w.reasons || {}).forEach(([k, v]) => res.reasons[k] = (res.reasons[k] || 0) + Number(v));
+  });
   sessions.forEach(s => {
     if (s.cancelled || s.session_date > t || (s.session_date === t && s.start_time && hhmm(s.start_time) > hm)) return;
+    if (joined && s.session_date < joined) return;
     if (injuredOn(u, s.session_date, "exclude_attendance")) { res.excluded++; return; }
     res.counted++;
     const a = att.find(x => x.session_id === s.id && x.user_id === u);
@@ -1148,11 +1318,21 @@ async function loadStats() {
     const [a, p, l] = await Promise.all([S.be.attendance(part), S.be.attendancePrivate(part), S.be.attendanceLog(part)]);
     att.push(...a); priv.push(...p); log.push(...l);
   }
-  S.stats = { from, sessions, att, priv, log, loaded: true };
+  const weekly = await S.be.list("attendance_weekly");
+  S.stats = { from, sessions, att, priv, log, weekly, loaded: true };
 }
 const RUN_RE = /^\s*(\d+\s*x\s*)?\d+(\s*m)?\b|hürden|huerden|lauf|staffel|gehen|cross/i;
 const betterFor = disc => /(weit|hoch|stab|drei|kugel|diskus|speer|hammer|ball|kampf|punkte)/i.test(disc) ? "higher" : RUN_RE.test(disc) ? "lower" : "higher";
 const DISCIPLINES = ["60m", "100m", "200m", "300m", "400m", "800m", "1500m", "60m Hürden", "100m Hürden", "110m Hürden", "400m Hürden", "4x100m", "4x400m", "Weitsprung", "Hochsprung", "Stabhochsprung", "Dreisprung", "Kugelstoß", "Diskuswurf", "Speerwurf", "Siebenkampf", "Zehnkampf"];
+// PB nur, wenn sie als solche markiert wurde oder einen früheren Eintrag geschlagen hat
+function pbInfo(c) {
+  const k = c.discipline.trim().toLowerCase();
+  const same = S.comps.filter(x => x.user_id === c.user_id && x.discipline.trim().toLowerCase() === k && x.value != null);
+  const best = pbMap(c.user_id)[k];
+  if (!best || best.id !== c.id) return null;
+  const beaten = same.some(x => x.id !== c.id && x.comp_date <= c.comp_date);
+  return c.is_pb || beaten ? (beaten ? "neu" : "pb") : null;
+}
 function pbMap(u) {
   const m = {};
   S.comps.filter(c => c.user_id === u && c.value != null).forEach(c => {
@@ -1226,6 +1406,7 @@ function viewLeistung() {
   if (S.perfView === "enter") return html + viewEnter();
   return html + viewOverview();
 }
+const rateClass = r => r == null ? "r-na" : r >= 95 ? "r4" : r >= 85 ? "r3" : r >= 70 ? "r2" : r >= 50 ? "r1" : "r0";
 function viewOverview() {
   if (!S.stats.loaded || S.stats.from !== addDays(todayIso(), -STAT_RANGES[S.statRange][1])) {
     loadStats().then(render).catch(e => toast(deErr(e), "error"));
@@ -1240,16 +1421,17 @@ function viewOverview() {
   const seg = Object.entries(STAT_RANGES).map(([k, [l]]) => `<button data-act="statRange" data-v="${k}" aria-pressed="${S.statRange === k}">${l}</button>`).join("");
   return `<div class="seg" style="margin-bottom:12px">${seg}</div>
     <div class="stats" style="margin-bottom:12px">
-      <div class="stat"><b>${avg == null ? "–" : avg + " %"}</b><span>Ø Trainingsbeteiligung</span></div>
+      <div class="stat"><b><i class="ratedot ${rateClass(avg)}"></i>${avg == null ? "–" : avg + " %"}</b><span>Ø Trainingsbeteiligung</span></div>
       <div class="stat"><b>${metAll}/${rows.length}</b><span>erfüllen alle Normen</span></div>
       <div class="stat"><b>${rows.filter(r => r.inj).length}</b><span>verletzt</span></div></div>
     <div class="sortrow small muted">Sortieren: ${[["name", "Name"], ["rate", "Beteiligung"], ["norm", "Normen"]].map(([k, l]) => `<button class="linkbtn small" data-act="statSort" data-v="${k}" ${S.statSort === k ? 'aria-pressed="true"' : ""}>${l}</button>`).join(" · ")}</div>
-    <div class="card flush">${sorted.map(({ p, a, n, inj }) => `<button class="row" data-act="athleteOpen" data-id="${esc(p.id)}">
+    <div class="card flush overview">${sorted.map(({ p, a, n, inj }) => `<button class="row" data-act="athleteOpen" data-id="${esc(p.id)}">
       <span class="grow"><span class="name">${esc(p.display_name)} ${inj ? '<span class="chip off">verletzt</span>' : ""}</span>
       <span class="meta">${esc(groupName(p.plan_group_id) || "keine Gruppe")}${a.counted ? ` · ${a.attended}/${a.counted} Trainings` : ""}${a.flipped ? ` · ${a.flipped}× umentschieden` : ""}${a.late ? ` · ${a.late}× zu spät` : ""}</span>
-      <span class="bar" aria-hidden="true"><i style="width:${a.rate ?? 0}%"></i></span></span>
-      <span class="statcol"><b>${a.rate == null ? "–" : a.rate + " %"}</b><span class="small muted">${n.total || n.missing ? `Normen ${n.met}/${n.total + n.missing}` : "keine Norm"}</span></span>
+      <span class="bar big" aria-hidden="true"><i class="${rateClass(a.rate)}" style="width:${a.rate ?? 0}%"></i></span></span>
+      <span class="statcol"><b><i class="ratedot ${rateClass(a.rate)}"></i>${a.rate == null ? "–" : a.rate + " %"}</b><span class="small muted">${n.total || n.missing ? `Normen ${n.met}/${n.total + n.missing}` : "keine Norm"}</span></span>
       <span class="chev">${ICON.chev}</span></button>`).join("") || `<div class="row muted">Noch keine Athleten</div>`}</div>
+    <div class="ratelegend small muted"><span><i class="ratedot r0"></i>&lt; 50 %</span><span><i class="ratedot r1"></i>50–69</span><span><i class="ratedot r2"></i>70–84</span><span><i class="ratedot r3"></i>85–94</span><span><i class="ratedot r4"></i>95–100 %</span></div>
     <p class="small muted" style="margin:8px 4px">Trainingsbeteiligung: Anteil der vergangenen gemeinsamen Trainings, bei denen jemand da war (zugesagt und nicht als „nicht erschienen“ markiert). Zeiten mit Verletzung zählen nicht mit, wenn das so eingetragen ist. Normen: zuletzt gemessener Wert je Test.</p>`;
 }
 function viewEnter() {
@@ -1288,9 +1470,10 @@ function viewNormSetup() {
 function viewComps() {
   const mine = S.comps.filter(c => c.user_id === S.me.id);
   const pbs = pbMap(S.me.id);
-  let html = `<div class="btns" style="margin:0 0 10px"><button class="btn" data-act="compNew">+ Ergebnis eintragen</button></div>`;
+  let html = `<div class="btns" style="margin:0 0 10px"><button class="btn" data-act="compNew">+ Ergebnis eintragen</button><button class="btn ghost" data-act="pbNew">+ Bisherige Bestleistung</button></div>`;
   if (!isStaff() || mine.length) {
-    html += `<h2>Meine Bestleistungen</h2>` + (Object.keys(pbs).length ? `<div class="card flush">${Object.values(pbs).sort((a, b) => a.discipline.localeCompare(b.discipline, "de", { numeric: true })).map(c => `<div class="row"><span class="grow"><span class="name">${esc(c.discipline)}</span><span class="meta">${esc(c.comp_name)} · ${dm(c.comp_date)}${String(c.comp_date).slice(0, 4) !== String(todayIso()).slice(0, 4) ? String(c.comp_date).slice(2, 4) : ""}</span></span><span class="val">${esc(c.result)}</span></div>`).join("")}</div>` : `<div class="card muted">Noch keine Ergebnisse.</div>`);
+    html += `<h2>Meine Bestleistungen</h2>` + (Object.keys(pbs).length ? `<div class="card flush">${Object.values(pbs).sort((a, b) => a.discipline.localeCompare(b.discipline, "de", { numeric: true })).map(c => { const known = pbInfo(c); return `<div class="row"><span class="grow"><span class="name">${esc(c.discipline)}</span><span class="meta">${known ? "" : "bester Eintrag in der App · "}${esc(c.comp_name)} · ${dm(c.comp_date)}${String(c.comp_date).slice(0, 4) !== String(todayIso()).slice(0, 4) ? String(c.comp_date).slice(2, 4) : ""}</span></span><span class="val">${esc(c.result)}</span>${known ? '<span class="chip solid">PB</span>' : ""}</div>`; }).join("")}</div>
+      <p class="small muted" style="margin:6px 4px">Trag deine bisherigen Bestleistungen einmal ein („+ Bisherige Bestleistung“). Dann erkennt die App bei neuen Ergebnissen, ob es eine neue PB ist.</p>` : `<div class="card muted">Noch keine Ergebnisse. Trag am besten zuerst deine bisherigen Bestleistungen ein.</div>`);
   }
   const recent = S.comps.slice().sort((a, b) => b.comp_date.localeCompare(a.comp_date)).slice(0, 60);
   const groups = {};
@@ -1298,43 +1481,77 @@ function viewComps() {
   html += `<h2>Ergebnisse der Gruppe</h2>` + (recent.length ? Object.entries(groups).map(([k, list]) => {
     const [d, name] = k.split("|");
     return `<div class="card flush"><div class="subhead">${esc(name)} · ${fmtDay(d)}</div>${list.map(c => {
-      const pb = pbMap(c.user_id)[c.discipline.trim().toLowerCase()];
       const editable = isStaff() || c.user_id === S.me.id;
       const inner = `<span class="grow"><span class="name">${esc((person(c.user_id) || {}).display_name || "?")}</span><span class="meta">${esc(c.discipline)}${c.place ? " · Platz " + esc(c.place) : ""}${c.wind ? " · Wind " + esc(c.wind) : ""}${c.note ? " · " + esc(c.note) : ""}</span></span>
-        <span class="val">${esc(c.result)}</span>${pb && pb.id === c.id ? '<span class="chip solid">PB</span>' : ""}`;
+        <span class="val">${esc(c.result)}</span>${pbInfo(c) ? `<span class="chip solid">${pbInfo(c) === "neu" ? "neue PB" : "PB"}</span>` : ""}`;
       return editable ? `<button class="row" data-act="compEdit" data-id="${esc(c.id)}">${inner}<span class="chev">${ICON.chev}</span></button>` : `<div class="row">${inner}</div>`;
     }).join("")}</div>`;
   }).join("") : `<div class="card muted">Noch keine Wettkampfergebnisse.</div>`);
   return html;
 }
+const PHASE_COLORS = 4;
+function timelineHtml(entries, lo, hi, big) {
+  const span = Math.max(1, (parseIso(hi) - parseIso(lo)) / 864e5), t = todayIso();
+  const pos = d => Math.min(100, Math.max(0, (parseIso(d) - parseIso(lo)) / 864e5 / span * 100));
+  const vis = e => (e.end_date || e.start_date) >= lo && e.start_date <= hi;
+  const phases = entries.filter(e => e.kind === "phase" && vis(e));
+  const tests = entries.filter(e => e.kind === "testwoche" && vis(e));
+  const comps = entries.filter(e => (e.kind === "wettkampf" || e.kind === "sonstiges") && vis(e));
+  const allPh = entries.filter(e => e.kind === "phase");
+  const bar = (e, cls, minDays) => {
+    const end = e.end_date || addDays(e.start_date, minDays - 1), l = pos(e.start_date), w = Math.max(cls === "tw" ? (big ? 3.5 : 9) : (big ? 1.2 : 2.5), pos(addDays(end, 1)) - l);
+    return `<button class="tl-bar ${cls}" style="left:${l}%;width:${w}%" data-act="calOpen" data-id="${esc(e.id)}" title="${esc(e.title)} (${dm(e.start_date)}${e.end_date && e.end_date !== e.start_date ? "–" + dm(e.end_date) : ""})"><span>${esc(e.title)}</span></button>`;
+  };
+  const months = [];
+  for (let d = new Date(parseIso(lo).getFullYear(), parseIso(lo).getMonth() + 1, 1); iso(d) <= hi; d.setMonth(d.getMonth() + 1)) months.push(iso(d));
+  return `<div class="tlwrap ${big ? "big" : ""}"><div class="tl" style="${big ? `width:${Math.max(100, span / 1.6)}%` : ""}">
+    <div class="tl-months">${months.map(m => `<span style="left:${pos(m)}%">${new Date(m + "T12:00:00").toLocaleDateString("de-DE", { month: "short" })}</span>`).join("")}</div>
+    <div class="tl-lane ph">${phases.map(e => bar(e, "ph" + (allPh.indexOf(e) % PHASE_COLORS + 1) + (e.start_date <= t && (e.end_date || e.start_date) >= t ? " cur" : ""), 7)).join("")}</div>
+    <div class="tl-lane tw">${tests.map(e => bar(e, "tw", 7).replace(`<span>${esc(e.title)}</span>`, `<span>${big ? esc(e.title) : "TW"}</span>`)).join("")}</div>
+    <div class="tl-lane wk">${comps.map((e, i) => `<button class="tl-dot ${e.kind}" style="left:${pos(e.start_date)}%" data-act="calOpen" data-id="${esc(e.id)}" title="${esc(e.title)} (${dm(e.start_date)})"></button>${big ? `<span class="tl-dotlabel ${i % 2 ? "alt" : ""}" style="left:${pos(e.start_date)}%">${esc(e.title)}</span>` : ""}`).join("")}</div>
+    ${t >= lo && t <= hi ? `<div class="tl-today" style="left:${pos(t)}%"><span>heute</span></div>` : ""}</div></div>`;
+}
+const invitesOf = id => S.compEntries.filter(c => c.entry_id === id);
+const myInvite = id => S.compEntries.find(c => c.entry_id === id && c.user_id === S.me.id);
+const INV_LABEL = { angefragt: "angefragt", zugesagt: "zugesagt", abgesagt: "abgelehnt" };
 function viewSeason() {
   const t = todayIso();
   const entries = S.calendar.slice().sort((a, b) => a.start_date.localeCompare(b.start_date));
   const phase = entries.find(e => e.kind === "phase" && e.start_date <= t && (e.end_date || e.start_date) >= t);
-  const upcoming = entries.filter(e => (e.end_date || e.start_date) >= t);
-  const past = entries.filter(e => (e.end_date || e.start_date) < t).reverse();
-  const phases = entries.filter(e => e.kind === "phase");
+  const others = entries.filter(e => e.kind !== "phase");
+  const upcoming = others.filter(e => (e.end_date || e.start_date) >= t);
+  const past = others.filter(e => (e.end_date || e.start_date) < t).reverse();
   let html = isStaff() ? `<div class="btns" style="margin:0 0 10px"><button class="btn ghost" data-act="calNew">+ Eintrag</button></div>` : "";
-  if (phases.length) {
-    const lo = phases[0].start_date, hi = phases.reduce((m, p) => (p.end_date || p.start_date) > m ? (p.end_date || p.start_date) : m, phases[0].end_date || phases[0].start_date);
-    const span = Math.max(1, (parseIso(hi) - parseIso(lo)) / 864e5);
-    const pos = d => Math.min(100, Math.max(0, (parseIso(d) - parseIso(lo)) / 864e5 / span * 100));
-    html += `<div class="card"><div class="small muted">Periodisierung</div>
-      <div class="timeline">${phases.map((p, i) => `<div class="tl-phase ${p === phase ? "cur" : ""} ${i % 2 ? "alt" : ""}" style="left:${pos(p.start_date)}%;width:${Math.max(2, pos(p.end_date || p.start_date) - pos(p.start_date))}%" title="${esc(p.title)}"><span>${esc(p.title)}</span></div>`).join("")}
-      ${t >= lo && t <= hi ? `<div class="tl-today" style="left:${pos(t)}%"></div>` : ""}
-      ${entries.filter(e => e.kind !== "phase" && e.start_date >= lo && e.start_date <= hi).map(e => `<div class="tl-mark ${e.kind}" style="left:${pos(e.start_date)}%" title="${esc(e.title)}"></div>`).join("")}</div>
-      <div class="small muted tl-legend"><span>${dm(lo)}</span><span>${phase ? `Jetzt: <b>${esc(phase.title)}</b>` : ""}</span><span>${dm(hi)}</span></div>
-      <div class="small muted"><span class="lg wk"></span> Wettkampf <span class="lg tw"></span> Testwoche</div></div>`;
+  // Nach 2 Wochen nachfragen: behalten oder löschen?
+  const stale = isStaff() ? entries.filter(e => !e.keep && (e.end_date || e.start_date) < addDays(t, -14)) : [];
+  if (stale.length) html += `<div class="card notice-card"><b>Seit über 2 Wochen vorbei</b><p class="small muted" style="margin:2px 0 8px">Behalten oder löschen? Eingetragene Wettkampfergebnisse bleiben in jedem Fall erhalten.</p>
+    ${stale.map(e => `<div class="injrow"><span class="grow"><b>${esc(e.title)}</b><span class="small muted" style="display:block">${KIND_LABEL[e.kind]} · ${fmtDay(e.start_date)}</span></span>
+      <button class="btn sm ghost" data-act="calKeep" data-id="${esc(e.id)}">Behalten</button><button class="btn sm danger" data-act="calDrop" data-id="${esc(e.id)}">Löschen</button></div>`).join("")}</div>`;
+  if (entries.length) {
+    const lo = addDays(t, -21), hi = addDays(t, 120);
+    html += `<div class="card"><div class="tlhead"><span class="grow"><span class="small muted">Periodisierung · nächste Monate</span>${phase ? `<br><b>Jetzt: ${esc(phase.title)}</b>${phase.end_date ? ` <span class="small muted">bis ${dm(phase.end_date)}</span>` : ""}` : ""}</span>
+      <button class="btn sm ghost" data-act="tlBig">Vergrößern</button></div>
+      ${timelineHtml(entries, lo, hi, false)}
+      <div class="small muted tl-legend"><span><i class="lg ph1"></i>Phasen</span><span><i class="lg tw"></i>Testwoche</span><span><i class="lg wk"></i>Wettkampf</span></div></div>`;
   }
-  const entryRow = e => `<button class="row" data-act="calOpen" data-id="${esc(e.id)}"><span class="kind ${e.kind}">${KIND_LABEL[e.kind]}</span>
-    <span class="grow"><span class="name">${esc(e.title)}</span><span class="meta">${fmtDay(e.start_date)}${e.end_date && e.end_date !== e.start_date ? " – " + fmtDay(e.end_date) : ""}${e.location ? " · " + esc(e.location) : ""}</span></span><span class="chev">${ICON.chev}</span></button>`;
+  const entryRow = e => {
+    const inv = invitesOf(e.id), mine = myInvite(e.id);
+    const staffInfo = e.kind === "wettkampf" && isStaff() ? (inv.length ? `${inv.length} gemeldet · ${inv.filter(i => i.status === "zugesagt").length} zugesagt${inv.some(i => i.status === "angefragt") ? ` · ${inv.filter(i => i.status === "angefragt").length} offen` : ""}` : "noch niemand gemeldet") : "";
+    const tag = e.kind === "wettkampf" && !isStaff() && mine ? `<span class="chip ${mine.status === "zugesagt" ? "ok" : mine.status === "abgesagt" ? "off" : "warnc"}">${INV_LABEL[mine.status]}</span>` : "";
+    return `<button class="row" data-act="calOpen" data-id="${esc(e.id)}"><span class="kind ${e.kind}">${KIND_LABEL[e.kind]}</span>
+    <span class="grow"><span class="name">${esc(e.title)}</span><span class="meta">${fmtDay(e.start_date)}${e.end_date && e.end_date !== e.start_date ? " – " + fmtDay(e.end_date) : ""}${e.location ? " · " + esc(e.location) : ""}</span>${staffInfo ? `<span class="meta">${esc(staffInfo)}</span>` : ""}</span>${tag}<span class="chev">${ICON.chev}</span></button>`;
+  };
   const months = {};
   upcoming.forEach(e => { const k = e.start_date.slice(0, 7); (months[k] = months[k] || []).push(e); });
   const mName = k => new Date(k + "-01T12:00:00").toLocaleDateString("de-DE", { month: "long", year: "numeric" });
   html += Object.keys(months).length ? Object.entries(months).map(([k, list]) => `<h2>${esc(mName(k))}</h2><div class="card flush">${list.map(entryRow).join("")}</div>`).join("")
-    : `<div class="card muted">${isStaff() ? "Noch nichts geplant. Trage Phasen, Wettkämpfe und Testwochen ein." : "Noch keine Saisonplanung eingetragen."}</div>`;
-  if (past.length) html += `<h2>Vergangen</h2><div class="card flush">${(S.showPastCal ? past : past.slice(0, 3)).map(entryRow).join("")}${!S.showPastCal && past.length > 3 ? `<button class="row muted" data-act="showPastCal">Alle ${past.length} anzeigen</button>` : ""}</div>`;
+    : `<div class="card muted">${isStaff() ? "Keine kommenden Wettkämpfe, Testwochen oder Termine." : "Für dich stehen gerade keine Wettkämpfe oder Termine an."}</div>`;
+  if (past.length) html += S.showPastCal ? `<h2>Vergangen</h2><div class="card flush">${past.map(entryRow).join("")}</div>` : `<button class="btn ghost block" style="margin-top:14px" data-act="showPastCal">Vergangene Einträge anzeigen (${past.length})</button>`;
+  if (!isStaff()) html += `<p class="small muted" style="margin:10px 4px">Wettkämpfe siehst du, wenn der Trainer dich dafür vorgesehen hat.</p>`;
   return html;
+}
+function pendingInvites() {
+  return S.compEntries.filter(c => c.user_id === S.me.id && c.status === "angefragt").map(c => S.calendar.find(e => e.id === c.entry_id)).filter(e => e && (e.end_date || e.start_date) >= todayIso());
 }
 
 /* ───── Leistung: Dialoge ───── */
@@ -1406,8 +1623,8 @@ function testTypeSheet(id) {
         <div class="hint">Gibt es für dieselbe Gruppe schon eine Norm, wird sie ersetzt.</div></form>
       <div class="btns"><button class="btn danger block" data-act="testTypeDelete" data-id="${esc(id)}">Test löschen</button></div>` : ""}`);
 }
-function compSheet(id) {
-  const c = id ? S.comps.find(x => x.id === id) : { user_id: S.me.id, comp_date: todayIso(), comp_name: "", discipline: "", result: "", place: "", wind: "", note: "", entry_id: null };
+function compSheet(id, asPb) {
+  const c = id ? S.comps.find(x => x.id === id) : { user_id: S.me.id, comp_date: asPb ? "" : todayIso(), comp_name: "", discipline: "", result: "", place: "", wind: "", note: "", entry_id: null, is_pb: !!asPb };
   const wk = S.calendar.filter(e => e.kind === "wettkampf").sort((a, b) => b.start_date.localeCompare(a.start_date));
   const athletes = S.profiles.filter(p => p.approved).sort(byName);
   sheet(`<h3>${id ? "Ergebnis bearbeiten" : "Wettkampfergebnis"}</h3>
@@ -1421,35 +1638,50 @@ function compSheet(id) {
       <div class="two"><label class="f"><span>Platz</span><input type="text" name="place" maxlength="20" value="${esc(c.place)}"></label>
       <label class="f"><span>Wind</span><input type="text" name="wind" maxlength="10" value="${esc(c.wind)}" placeholder="+1,2"></label></div>
       <label class="f"><span>Bemerkung</span><input type="text" name="note" maxlength="300" value="${esc(c.note)}"></label>
+      <label class="opt"><input type="checkbox" name="is_pb" ${c.is_pb ? "checked" : ""}><span><b>Das ist meine Bestleistung (PB)</b><span class="small muted">Z. B. eine PB aus der Zeit vor der App. Spätere bessere Ergebnisse erkennt die App dann als neue PB.</span></span></label>
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>
     ${id ? `<div class="btns"><button class="btn danger block" data-act="compDelete" data-id="${esc(id)}">Ergebnis löschen</button></div>` : ""}`);
 }
 function calSheet(id) {
   const e = id ? S.calendar.find(x => x.id === id) : { kind: "wettkampf", title: "", start_date: todayIso(), end_date: null, location: "", note: "" };
   if (id && !isStaff()) {
-    const res = S.comps.filter(c => c.entry_id === id);
+    const res = S.comps.filter(c => c.entry_id === id), mine = myInvite(id);
     sheet(`<h3>${esc(e.title)}</h3><p class="small muted">${KIND_LABEL[e.kind]} · ${fmtLong(e.start_date)}${e.end_date && e.end_date !== e.start_date ? " – " + fmtLong(e.end_date) : ""}${e.location ? " · " + esc(e.location) : ""}</p>
       ${e.note ? `<p class="pre">${esc(e.note)}</p>` : ""}
+      ${mine ? `<div class="card"><div class="small muted">Der Trainer möchte dich melden${mine.status !== "angefragt" ? ` · du hast <b>${INV_LABEL[mine.status]}</b>` : ""}</div>
+        <div class="resp"><button class="${mine.status === "zugesagt" ? "on yes" : ""}" data-act="invAnswer" data-id="${esc(id)}" data-v="zugesagt">${ICON.check} Ich bin dabei</button>
+        <button class="${mine.status === "abgesagt" ? "on no" : ""}" data-act="invAnswer" data-id="${esc(id)}" data-v="abgesagt">${ICON.x} Lieber nicht</button></div>
+        <p class="small muted" style="margin:8px 0 0">Absprachen dazu laufen über WhatsApp. Der Trainer kann die Meldung danach noch anpassen.</p></div>` : ""}
       ${res.length ? `<div class="card flush">${res.map(c => `<div class="row"><span class="grow"><span class="name">${esc((person(c.user_id) || {}).display_name || "?")}</span><span class="meta">${esc(c.discipline)}</span></span><span class="val">${esc(c.result)}</span></div>`).join("")}</div>` : ""}
       <div class="btns">${e.kind === "wettkampf" ? `<button class="btn" data-act="compNewFor" data-id="${esc(id)}">Mein Ergebnis eintragen</button>` : ""}<button class="btn ghost" data-act="closeSheet">Schließen</button></div>`);
     return;
   }
+  const inv = id ? invitesOf(id) : [];
+  const people = S.profiles.filter(p => p.approved && (trainsP(p) || inv.some(i => i.user_id === p.id))).sort(byName);
   sheet(`<h3>${id ? "Eintrag bearbeiten" : "Neuer Eintrag"}</h3>
-    <form data-form="cal" data-id="${esc(id || "")}">
-      <label class="f"><span>Art</span><select name="kind">${Object.entries(KIND_LABEL).map(([k, l]) => `<option value="${k}" ${e.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>
-        <div class="hint">Phasen (z. B. Allgemeine Vorbereitung, Hallensaison) erscheinen als Balken in der Periodisierung.</div></label>
+    <form data-form="cal" data-id="${esc(id || "")}" class="kind-${esc(e.kind)}">
+      <label class="f"><span>Art</span><select name="kind" data-change="calKind">${Object.entries(KIND_LABEL).map(([k, l]) => `<option value="${k}" ${e.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <div class="hint only-phase">Phasen (z. B. Allgemeine Vorbereitung, Hallensaison) erscheinen als farbige Balken in der Periodisierung.</div>
+        <div class="hint only-testwoche">Eine Testwoche dauert normalerweise eine Woche. Ohne Enddatum werden 7 Tage eingetragen.</div></label>
       <label class="f"><span>Titel</span><input type="text" name="title" required maxlength="120" value="${esc(e.title)}"></label>
-      <div class="two"><label class="f"><span>Von</span><input type="date" name="start" required value="${esc(e.start_date)}"></label>
-      <label class="f"><span>Bis (optional)</span><input type="date" name="end" value="${esc(e.end_date || "")}"></label></div>
-      <label class="f"><span>Ort</span><input type="text" name="location" maxlength="120" value="${esc(e.location)}"></label>
+      <div class="two"><label class="f"><span>Von</span><input type="date" name="start" required value="${esc(e.start_date)}" data-change="calStart"></label>
+      <label class="f"><span>Bis <span class="muted">(optional)</span></span><input type="date" name="end" value="${esc(e.end_date || "")}" data-change="calEnd"></label></div>
+      <label class="f not-phase"><span>Ort</span><input type="text" name="location" maxlength="120" value="${esc(e.location)}"></label>
       <label class="f"><span>Notiz</span><input type="text" name="note" maxlength="500" value="${esc(e.note)}"></label>
+      <div class="only-wettkampf"><div class="small muted" style="margin:2px 0 6px">Wen möchtest du melden? Die Personen sehen den Wettkampf und können zusagen oder ablehnen. Alle anderen sehen ihn nicht.</div>
+        <div class="checks personlist">${people.map(p => { const i = inv.find(x => x.user_id === p.id); return `<label><input type="checkbox" name="inv" value="${esc(p.id)}" ${i ? "checked" : ""}> ${esc(p.display_name)} ${i ? `<span class="chip ${i.status === "zugesagt" ? "ok" : i.status === "abgesagt" ? "off" : "warnc"}">${INV_LABEL[i.status]}</span>` : ""}${currentInjury(p.id) ? ' <span class="muted small">· verletzt</span>' : ""}</label>`; }).join("")}</div>
+        ${inv.length ? `<details class="mapmore"><summary class="small">Antworten ändern (nach Absprache)</summary>${inv.map(i => `<div class="maprow"><span class="grow">${esc((person(i.user_id) || {}).display_name || "?")}</span>
+          <select name="st_${esc(i.user_id)}">${Object.entries(INV_LABEL).map(([k, l]) => `<option value="${k}" ${i.status === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>`).join("")}</details>` : ""}</div>
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>
     ${id ? `<div class="btns"><button class="btn danger block" data-act="calDelete" data-id="${esc(id)}">Eintrag löschen</button></div>` : ""}`);
 }
 async function reloadPerf() {
-  const [tests, norms, results, ainfo, injuries, calendar, comps, feedback] = await Promise.all(["test_types", "norms", "test_results", "athlete_info", "injuries", "calendar_entries", "competition_results", "feedback"].map(t => S.be.list(t)));
-  Object.assign(S, { tests, norms, results, ainfo, injuries, calendar, comps, feedback: feedback.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))) });
+  const [tests, norms, results, ainfo, injuries, calendar, comps, feedback, compEntries] = await Promise.all(["test_types", "norms", "test_results", "athlete_info", "injuries", "calendar_entries", "competition_results", "feedback", "competition_entries"].map(t => S.be.list(t)));
+  Object.assign(S, { tests, norms, results, ainfo, injuries, calendar, comps, compEntries, feedback: feedback.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))) });
+  await reloadBoard();
 }
+// Pinnwand: ohne SQL Teil 8 bleibt sie leer, die App läuft weiter
+async function reloadBoard() { try { S.fbBoard = await S.be.feedbackBoard(); } catch (e) { S.fbBoard = []; } }
 
 const perfActions = {
   perfView(el) { S.perfView = el.dataset.v; render(); },
@@ -1481,6 +1713,7 @@ const perfActions = {
     await quiet(busy(null, async () => { await S.be.removeRow("norms", el.dataset.id); await reloadPerf(); render(); testTypeSheet(el.dataset.tid); }));
   },
   compNew() { compSheet(null); },
+  pbNew() { compSheet(null, true); },
   compNewFor(el) { compSheet(null); const sel = document.querySelector('#dlg select[name=entry]'); if (sel) { sel.value = el.dataset.id; changes.compEntry(sel); } },
   compEdit(el) { compSheet(el.dataset.id); },
   async compDelete(el) {
@@ -1489,6 +1722,21 @@ const perfActions = {
   },
   termView(el) { S.termView = el.dataset.v; render(); },
   calNew() { calSheet(null); },
+  tlBig() {
+    const es = S.calendar, t = todayIso();
+    const lo = es.reduce((m, e) => e.start_date < m ? e.start_date : m, addDays(t, -28)), hi = es.reduce((m, e) => (e.end_date || e.start_date) > m ? (e.end_date || e.start_date) : m, addDays(t, 120));
+    sheet(`<h3>Periodisierung</h3><p class="small muted">Seitlich wischen. Balken und Punkte antippen für Details.</p>${timelineHtml(es, addDays(lo, -7), addDays(hi, 7), true)}
+      <div class="small muted tl-legend"><span><i class="lg ph1"></i>Phasen</span><span><i class="lg tw"></i>Testwoche</span><span><i class="lg wk"></i>Wettkampf</span></div>
+      <div class="btns"><button class="btn ghost block" data-act="closeSheet">Schließen</button></div>`);
+    setTimeout(() => { const w = document.querySelector("#dlg .tlwrap"), td = document.querySelector("#dlg .tl-today"); if (w && td) w.scrollLeft = td.offsetLeft - w.clientWidth / 3; }, 50);
+  },
+  async calKeep(el) { await quiet(busy(null, async () => { await S.be.saveRow("calendar_entries", { id: el.dataset.id, keep: true }); await reloadPerf(); render(); })); },
+  async calDrop(el) { await quiet(busy(null, async () => { await S.be.removeRow("calendar_entries", el.dataset.id); await reloadPerf(); render(); toast("Gelöscht"); })); },
+  async invAnswer(el) {
+    await quiet(busy(el.parentElement, async () => { await S.be.answerInvite(el.dataset.id, el.dataset.v); await reloadPerf(); render();
+      if ($("#dlg").open && document.querySelector("#dlg [data-act=invAnswer]")) calSheet(el.dataset.id);
+      toast(el.dataset.v === "zugesagt" ? "Zugesagt – der Trainer sieht es" : "Abgelehnt – der Trainer sieht es"); }));
+  },
   calOpen(el) { calSheet(el.dataset.id); },
   async calDelete(el) {
     if (!await ask("Eintrag löschen?", "Der Kalendereintrag wird gelöscht. Eingetragene Wettkampfergebnisse bleiben erhalten.", "Löschen", true)) return calSheet(el.dataset.id);
@@ -1499,6 +1747,12 @@ const perfActions = {
   memberPerf(el) { closeSheet(); S.tab = "leistung"; S.perfView = "overview"; render(); loadStats().then(() => athleteSheet(el.dataset.id)).catch(e => toast(deErr(e), "error")); }
 };
 const perfChanges = {
+  calKind(el) {
+    const f = el.form; f.className = "kind-" + el.value;
+    if (el.value === "testwoche" && (!f.end.value || f.end.dataset.auto) && f.start.value) { f.end.value = addDays(f.start.value, 6); f.end.dataset.auto = "1"; }
+  },
+  calStart(el) { const f = el.form; if (f.kind.value === "testwoche" && el.value && (!f.end.value || f.end.dataset.auto)) { f.end.value = addDays(el.value, 6); f.end.dataset.auto = "1"; } },
+  calEnd(el) { delete el.dataset.auto; },
   async betaToggle(el) { await quiet(busy(null, async () => { S.settings = await S.be.updateSettings({ beta: el.checked }); render(); toast(el.checked ? "Beta-Schild an" : "Beta-Schild aus"); })); },
   enterTest(el) { S.enterTest = el.value; render(); },
   enterDate(el) { S.enterDate = el.value || todayIso(); render(); },
@@ -1573,15 +1827,26 @@ const perfForms = {
   async comp(f) {
     const disc = f.disc.value.trim(), result = f.result.value.trim();
     const row = { user_id: f.user ? f.user.value : S.me.id, entry_id: f.entry ? (f.entry.value || null) : null, comp_name: f.name.value.trim(), comp_date: f.date.value, discipline: disc,
-      result, value: parseVal(result), better: betterFor(disc), place: f.place.value.trim(), wind: f.wind.value.trim(), note: f.note.value.trim() };
+      result, value: parseVal(result), better: betterFor(disc), place: f.place.value.trim(), wind: f.wind.value.trim(), note: f.note.value.trim(), is_pb: f.is_pb.checked };
     if (f.dataset.id) row.id = f.dataset.id;
-    await S.be.saveRow("competition_results", row); await reloadPerf(); closeSheet(); render(); toast("Ergebnis gespeichert");
+    const before = pbMap(row.user_id)[disc.toLowerCase()];
+    const saved = await S.be.saveRow("competition_results", row); await reloadPerf(); closeSheet(); render();
+    const newPb = before && before.id !== saved.id && row.value != null && (row.better === "lower" ? row.value < before.value : row.value > before.value);
+    toast(newPb ? `Neue Bestleistung über ${disc}! Vorher ${before.result}` : "Ergebnis gespeichert");
   },
   async cal(f) {
     if (f.end.value && f.end.value < f.start.value) return toast("Das Ende liegt vor dem Beginn.", "error");
-    const row = { kind: f.kind.value, title: f.title.value.trim(), start_date: f.start.value, end_date: f.end.value || null, location: f.location.value.trim(), note: f.note.value.trim() };
+    const kind = f.kind.value;
+    const row = { kind, title: f.title.value.trim(), start_date: f.start.value, end_date: f.end.value || (kind === "testwoche" ? addDays(f.start.value, 6) : null),
+      location: kind === "phase" ? "" : f.location.value.trim(), note: f.note.value.trim() };
     if (f.dataset.id) row.id = f.dataset.id;
-    await S.be.saveRow("calendar_entries", row); await reloadPerf(); closeSheet(); render(); toast("Gespeichert");
+    const saved = await S.be.saveRow("calendar_entries", row);
+    if (kind === "wettkampf") {
+      const ids = [...f.querySelectorAll("[name=inv]:checked")].map(x => x.value);
+      const status = {}; f.querySelectorAll("select[name^=st_]").forEach(sel => status[sel.name.slice(3)] = sel.value);
+      await S.be.setInvites(saved.id, ids, status);
+    }
+    await reloadPerf(); closeSheet(); render(); toast("Gespeichert");
   }
 };
 
@@ -1715,13 +1980,19 @@ function sessionEditSheet(s) {
     ${isNew ? "" : `<div class="btns"><button class="btn danger block" data-act="sessDelete" data-id="${esc(s.id)}">Termin löschen</button></div>`}`);
 }
 
+function youtubeId(url) {
+  const m = String(url || "").match(/(?:youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
 async function exerciseSheet(id, prefillName) {
   const e = id ? S.exercises.find(x => x.id === id) : null;
   const mayEdit = e && (isStaff() || e.created_by === S.me.id);
   if (e && !exerciseSheet.edit) {
     let media = "";
     if (e.video_path) media = `<video controls playsinline preload="metadata" class="exvideo" id="exvideo"></video>`;
-    if (e.video_url) media += `<p><a class="btn ghost" href="${esc(e.video_url)}" target="_blank" rel="noopener noreferrer">${ICON.video} Video ansehen</a></p>`;
+    const yt = youtubeId(e.video_url);
+    if (yt) media += `<div class="ytwrap"><iframe src="https://www.youtube-nocookie.com/embed/${esc(yt)}?rel=0&playsinline=1" title="Video: ${esc(e.name)}" allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+    else if (e.video_url) media += `<p><a class="btn ghost" href="${esc(e.video_url)}" target="_blank" rel="noopener noreferrer">${ICON.video} Video ansehen</a></p>`;
     sheet(`<h3>${esc(e.name)}</h3><p class="small muted">${[e.abbreviation && `Abkürzung: <b>${esc(e.abbreviation)}</b>`, e.category && esc(e.category)].filter(Boolean).join(" · ")}</p>
       ${e.description ? `<p class="pre">${esc(e.description)}</p>` : `<p class="small muted">Noch keine Beschreibung.</p>`}${media}
       <div class="btns">${mayEdit ? `<button class="btn ghost" data-act="exEdit" data-id="${esc(e.id)}">Bearbeiten</button>` : ""}<button class="btn ghost" data-act="closeSheet">Schließen</button></div>`);
@@ -1737,7 +2008,8 @@ async function exerciseSheet(id, prefillName) {
       <div class="two"><label class="f"><span>Abkürzung</span><input type="text" name="abbreviation" maxlength="30" value="${esc(x.abbreviation)}" placeholder="z. B. NHE"></label>
       <label class="f"><span>Kategorie</span><input type="text" name="category" maxlength="60" list="cats" value="${esc(x.category)}" placeholder="z. B. Kraft"><datalist id="cats">${cats.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label></div>
       <label class="f"><span>Beschreibung / Ausführung</span><textarea name="description" maxlength="4000" rows="4">${esc(x.description)}</textarea></label>
-      <label class="f"><span>Video-Link <span class="muted">(YouTube, Instagram …)</span></span><input type="url" name="video_url" maxlength="500" value="${esc(x.video_url)}" placeholder="https://"></label>
+      <label class="f"><span>Video-Link <span class="muted">(am besten YouTube, „nicht gelistet“)</span></span><input type="url" name="video_url" maxlength="500" value="${esc(x.video_url)}" placeholder="https://youtu.be/…">
+        <div class="hint">YouTube-Videos werden direkt in der App abgespielt und brauchen keinen Speicher bei uns. „Nicht gelistet“ heißt: nur wer den Link hat, findet das Video.</div></label>
       <label class="f"><span>Kurzvideo hochladen <span class="muted">(max. 50 MB)</span></span><input type="file" name="video" accept="video/mp4,video/quicktime,video/webm,video/*">
         ${e && e.video_path ? `<label class="small"><input type="checkbox" name="removeVideo"> Vorhandenes Video entfernen</label>` : ""}</label>
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>
@@ -1752,6 +2024,23 @@ function itemSheet(text) {
 }
 
 /* ───── Plan-Import ───── */
+function planFormatHtml() {
+  return `<h3>So liest die App den Plan</h3><div class="helptext">
+  <p><b>Datei:</b> Excel (.xlsx). In Numbers über Ablage → Exportieren → Excel.</p>
+  <p><b>Ein Blatt pro Gruppe oder Programm</b>, z. B. Kurzsprint, Langsprint, Stab, Alternativplan … Der Blattname erscheint so in der App.</p>
+  <p><b>Wochentage:</b> Eine Zeile mit <i>Montag, Dienstag … Sonntag</i>, jeder Tag in einer eigenen Spalte. Die Zeile muss in den ersten 30 Zeilen stehen.</p>
+  <p><b>Über den Wochentagen</b> (optional): Saison in der ersten Zelle, z. B. „Wintersaison“, und „Ziel:“ mit dem Ziel daneben oder darunter.</p>
+  <p><b>Unter jedem Wochentag</b>, von oben nach unten in derselben Spalte:</p>
+  <ol><li>Ort und Uhrzeit oder Status, z. B. „LAA (17:25)“, „Pause“, „Regeneration“, „Optional“</li>
+  <li>Tagesthema, z. B. „Kraft Beine“</li>
+  <li>Übungen, jede in eine eigene Zelle. Die Belastung kommt in die Zelle <b>direkt darunter</b> (z. B. „3x5“, „max“, „Min 10“, „P: 6 min“, „Jungs 7,4-7,6s“). Mehrere Belastungszeilen untereinander sind möglich.</li>
+  <li>Eine Leerzeile beginnt einen neuen Block.</li></ol>
+  <p><b>Abkürzungen:</b> Ein Blatt mit „Abkürzungen“ im Namen, Spalte A die Abkürzung, Spalte B die Bedeutung. Es wird in die Übungssammlung übernommen.</p>
+  <p><b>Andere Blätter</b> ohne Wochentagszeile (z. B. „Übungen“, „Turnhalle“) erscheinen als Tabelle unter dem Plan.</p>
+  <p><b>Bitte nicht:</b> zwei Tage in einer Spalte, Übung und Belastung nebeneinander in zwei Spalten, Bilder oder Textfelder (werden ignoriert). Zusammengeführte Zellen gehen, der Text steht dann in der ersten Zelle.</p>
+  <p><b>Alternativpläne:</b> Beim Hochladen kann jedes Blatt einer Gruppe <i>und/oder einzelnen Personen</i> zugeordnet werden. Wer verletzt ist, bleibt in seiner Gruppe und sieht das Alternativblatt zuerst. Die Zuordnung lässt sich später im Plan unter „Zuordnung ändern“ anpassen.</p>
+  <p>Vor dem Speichern zeigt „Vorschau“ bei jedem Blatt, wie die App es gelesen hat.</p></div>`;
+}
 let IMPORT = null;
 function defaultImportWeek() { const t = todayIso(), mon = mondayOf(t); return dowOf(t) >= 4 ? addDays(mon, 7) : mon; }
 function importSheet() {
@@ -1772,11 +2061,19 @@ function importSheet() {
       <div class="small muted" style="margin:10px 0 6px">Welches Blatt gehört zu welcher Trainingsgruppe?</div>
       ${r.plans.map((p, i) => {
         const match = S.groups.find(g => norm(g.name) === norm(p.name));
-        return `<div class="maprow"><span class="grow"><b>${esc(p.name)}</b><span class="small muted" style="display:block">${p.days.filter(d => d.items.length).length} Tage mit Programm</span></span>
-          <select name="map${i}" aria-label="Trainingsgruppe für ${esc(p.name)}"><option value="">– keine –</option>
+        const words = p.name.toLowerCase().split(/[^a-zäöüß]+/).filter(w => w.length >= 3);
+        const named = trainees().filter(u => words.includes(firstName(u.display_name).toLowerCase()));
+        const alt = /altern|reha|verletz|individ/i.test(p.name);
+        const days = p.days.filter(d => d.items.length).length, items = p.days.reduce((n, d) => n + d.items.length, 0);
+        return `<div class="maprow"><span class="grow"><b>${esc(p.name)}</b><span class="small muted" style="display:block">${days} Tage, ${items} Übungen erkannt</span></span>
+          <select name="map${i}" aria-label="Trainingsgruppe für ${esc(p.name)}"><option value="">– keine Gruppe –</option>
           ${S.groups.map(g => `<option value="${esc(g.id)}" ${match && match.id === g.id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}
-          <option value="__new" ${match ? "" : "selected"}>+ Neue Gruppe „${esc(p.name)}“</option></select></div>`;
+          <option value="__new" ${match || alt ? "" : "selected"}>+ Neue Gruppe „${esc(p.name)}“</option></select></div>
+          <details class="mapmore" ${named.length || alt ? "open" : ""}><summary class="small">Für einzelne Personen${named.length ? ` (${named.length} erkannt)` : ""}</summary>
+            <div class="checks personlist">${trainees().sort(byName).map(u => `<label><input type="checkbox" name="u${i}" value="${esc(u.id)}" ${named.includes(u) ? "checked" : ""}> ${esc(u.display_name)} <span class="muted small">${esc(groupName(u.plan_group_id) || "")}${currentInjury(u.id) ? " · verletzt" : ""}</span></label>`).join("")}</div></details>
+          <details class="mapmore"><summary class="small">Vorschau: so wird das Blatt gelesen</summary><div class="preview">${renderDays(p.days, mondayOf(todayIso()), false)}</div></details>`;
       }).join("")}
+      <p class="small"><button type="button" class="linkbtn small" data-act="planFormat">Wie muss der Plan aufgebaut sein?</button></p>
       ${r.extras.length ? `<p class="small muted" style="margin-top:10px">Weitere Blätter werden unter dem Plan angezeigt: ${r.extras.map(x => esc(x.name)).join(", ")}</p>` : ""}
       ${newAbk.length ? `<label class="opt"><input type="checkbox" name="abk" checked><span><b>${newAbk.length} Abkürzungen in die Übungssammlung übernehmen</b><span class="small muted">${esc(newAbk.map(a => a.abbreviation).join(", "))}</span></span></label>` : ""}
       ${existing ? `<p class="small" style="margin-top:8px">Für diese Woche gibt es schon den Plan „${esc(existing.title)}“. Der neue Plan ersetzt ihn.</p>` : ""}
@@ -1804,7 +2101,18 @@ const actions = {
   // Plan
   planView(el) { S.planView = el.dataset.v; render(); },
   planWeek(el) { S.planWeek = addDays(S.planWeek || mondayOf(todayIso()), Number(el.dataset.d)); S.scrolledToday = false; render(); },
-  planSheet(el) { S.planSheet = el.dataset.name; LS.set("la_sheet", S.planSheet); render(); },
+  planSheet(el) { const p = planForWeek(S.planWeek || mondayOf(todayIso())); if (p) S.sheetChoice[p.id] = el.dataset.id; render(); },
+  planFormat() { sheet(planFormatHtml() + `<div class="btns"><button class="btn ghost block" data-act="${IMPORT ? "importBack" : "closeSheet"}">${IMPORT ? "Zurück zum Hochladen" : "Schließen"}</button></div>`); },
+  importBack() { importSheet(); },
+  sheetAssign(el) {
+    const p = planForWeek(S.planWeek || mondayOf(todayIso())), sh = (S.sheetCache[p.id] || []).find(x => x.id === el.dataset.id);
+    sheet(`<h3>Blatt zuordnen</h3><p class="small muted">„${esc(sh.name)}“ · ${esc(p.title || "Wochenplan")}</p>
+      <form data-form="sheetAssign" data-id="${esc(sh.id)}" data-plan="${esc(p.id)}">
+        <label class="f"><span>Trainingsgruppe</span><select name="group"><option value="">– keine –</option>${S.groups.map(g => `<option value="${esc(g.id)}" ${g.id === sh.group_id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}</select></label>
+        <div class="small muted" style="margin:4px 0 6px">Zusätzlich für einzelne Personen (z. B. Alternativplan bei Verletzung). Sie sehen dieses Blatt zuerst, bleiben aber in ihrer Trainingsgruppe.</div>
+        <div class="checks personlist">${trainees().sort(byName).map(u => `<label><input type="checkbox" name="u" value="${esc(u.id)}" ${(sh.user_ids || []).includes(u.id) ? "checked" : ""}> ${esc(u.display_name)} <span class="muted small">${esc(groupName(u.plan_group_id) || "")}${currentInjury(u.id) ? " · verletzt" : ""}</span></label>`).join("")}</div>
+        <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>`);
+  },
   openPlanToday() { S.tab = "plan"; S.planView = "week"; S.planWeek = null; S.scrolledToday = false; LS.set("la_tab", "plan"); render(); },
   openPlan(el) { const p = S.plans.find(x => x.id === el.dataset.id); S.planWeek = p.valid_from; S.planView = "week"; render(); scrollTo(0, 0); },
   planUpload() { $("#plan-file").click(); },
@@ -1969,6 +2277,11 @@ Object.assign(actions, perfActions, {
       <button class="btn ghost block" data-act="closeSheet">Schließen</button></div>`);
   },
   feedback() { feedbackSheet(); },
+  async fbVote(el) {
+    const b = (S.fbBoard || []).find(x => x.id === el.dataset.id); if (!b) return;
+    await quiet(busy(el, async () => { await S.be.voteFeedback(b.id, !b.voted); await reloadBoard();
+      const box = document.getElementById("fb-board"); if (box) box.innerHTML = fbBoardHtml(); else render(); }));
+  },
   fbFilter(el) { S.fbFilter = el.dataset.v; render(); },
   async fbStatus(el) { await quiet(busy(null, async () => { await S.be.saveRow("feedback", { id: el.dataset.id, status: el.dataset.v }); await reloadPerf(); render(); })); },
   async fbReply(el) {
@@ -1981,7 +2294,7 @@ Object.assign(actions, perfActions, {
   async fbDelete(el) {
     const f = S.feedback.find(x => x.id === el.dataset.id), own = f.user_id === S.me.id;
     if (!await ask(own ? "Feedback zurückziehen?" : "Feedback löschen?", "Die Nachricht wird gelöscht.", own ? "Zurückziehen" : "Löschen", true)) return own ? feedbackSheet() : undefined;
-    await quiet(busy(null, async () => { await S.be.removeRow("feedback", f.id); await reloadPerf(); render(); if (own && S.moreView !== "feedback") feedbackSheet(); }));
+    await quiet(busy(null, async () => { await S.be.removeRow("feedback", f.id); await reloadPerf(); render(); if (own && !(S.tab === "settings" && S.moreView === "feedback")) feedbackSheet(); }));
   },
   fbExport() {
     download(`feedback_${stamp()}.json`, S.feedback.map(f => ({ datum: f.created_at, von: (person(f.user_id) || {}).display_name || "", art: FB_CAT[f.category], bereich: f.context, nachricht: f.message, status: f.status, antwort: f.admin_note, version: f.app_version, geraet: f.device })));
@@ -2027,6 +2340,7 @@ const changes = {
 };
 Object.assign(changes, perfChanges);
 const inputs = {
+  fbSimilar(el) { S.fbDraft = el.value; const box = document.getElementById("fb-board"); if (box) box.innerHTML = fbBoardHtml(); },
   exSearch(el) {
     S.exSearch = el.value; const pos = el.selectionStart;
     render(); const n = document.querySelector('[data-input="exSearch"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); }
@@ -2069,6 +2383,9 @@ async function restoreBackup(data) {
     await S.be.upsert("competition_results", (tables.competition_results || []).filter(keepUser).map(c => fixRef(c, "entered_by")));
     await S.be.upsert("week_openings", (tables.week_openings || []).map(w => fixRef(w, "opened_by")));
     await S.be.upsert("feedback", (tables.feedback || []).filter(keepUser));
+    await S.be.upsert("attendance_weekly", (tables.attendance_weekly || []).filter(keepUser));
+    await S.be.upsert("competition_entries", (tables.competition_entries || []).filter(keepUser));
+    await S.be.upsert("plan_sheets", (tables.plan_sheets || []).map(s => Object.assign({}, s, { group_id: mapG(s.group_id), user_ids: (s.user_ids || []).filter(u => known.has(u)) })));
   }
   const rows = data.profiles.slice().sort((a, b) => (b.role === "admin") - (a.role === "admin"));
   for (const p of rows) {
@@ -2083,6 +2400,11 @@ async function restoreBackup(data) {
 }
 
 const forms = {
+  async sheetAssign(f) {
+    const ids = [...f.querySelectorAll("[name=u]:checked")].map(x => x.value);
+    await S.be.updateSheet(f.dataset.id, { group_id: f.group.value || null, user_ids: ids });
+    delete S.sheetCache[f.dataset.plan]; closeSheet(); await sheetsOf(S.plans.find(p => p.id === f.dataset.plan)); render(); toast("Zuordnung gespeichert");
+  },
   async connect(f) {
     const url = f.url.value.trim().replace(/\/+$/, ""), key = f.key.value.trim();
     if (!/^https:\/\/.+/.test(url)) return toast("Die URL muss mit https:// beginnen.", "error");
@@ -2188,7 +2510,8 @@ const forms = {
         const ex = S.groups.find(g => norm(g.name) === norm(p.name));
         gid = ex ? ex.id : (await S.be.insertGroup({ name: p.name.slice(0, 60), sort_order: ++max })).id;
       }
-      sheets.push({ name: p.name, group_id: gid, sort_order: i + 1, data: { days: p.days } });
+      const uids = [...f.querySelectorAll(`[name=u${i}]:checked`)].map(x => x.value);
+      sheets.push({ name: p.name, group_id: gid, user_ids: uids, sort_order: i + 1, data: { days: p.days } });
     }
     const p0 = r.plans[0];
     await S.be.savePlan({ valid_from: week, title: f.title.value.trim(), season: p0.season || "", goal: p0.goal || "", source_name: r.file, extra_sheets: r.extras.filter(x => !/abk/i.test(x.name)).map(x => ({ name: x.name, rows: x.rows })) }, sheets);

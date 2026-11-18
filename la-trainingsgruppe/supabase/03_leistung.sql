@@ -39,7 +39,9 @@ create table if not exists public.test_types (
   active     boolean not null default true
 );
 
-insert into public.test_types (name, unit, category, better, sides, entry, note, sort_order) values
+-- Vorlagen nur bei der Ersteinrichtung (leere Tabelle), damit gelöschte oder umbenannte Tests nicht wiederkommen
+insert into public.test_types (name, unit, category, better, sides, entry, note, sort_order)
+select * from (values
   ('30m fliegend',      's',  'sprint', 'lower',  false, 'staff', '30m Anlauf', 10),
   ('80m',               's',  'sprint', 'lower',  false, 'staff', 'Kurzsprint', 11),
   ('300m',              's',  'sprint', 'lower',  false, 'staff', 'Langsprint', 12),
@@ -59,6 +61,8 @@ insert into public.test_types (name, unit, category, better, sides, entry, note,
   ('Schulterdrücken',   'kg', 'kraft',  'higher', false, 'self',  '1RM', 38),
   ('Klimmzug',          'kg', 'kraft',  'higher', false, 'self',  'Zusatzgewicht bei 1RM', 39),
   ('Dips',              'kg', 'kraft',  'higher', false, 'self',  'Zusatzgewicht bei 1RM', 40)
+) v (name, unit, category, better, sides, entry, note, sort_order)
+where not exists (select 1 from public.test_types)
 on conflict (name) do nothing;
 
 -- Norm je Test und Geschlecht; optional nur für eine Trainingsgruppe (z. B. 80m nur Kurzsprint)
@@ -82,7 +86,8 @@ from (values
 ) as n (test, sex, grp, value)
 join public.test_types t on t.name = n.test
 left join public.plan_groups g on g.name = n.grp
-where n.grp is null or g.id is not null
+where (n.grp is null or g.id is not null)
+  and not exists (select 1 from public.norms)   -- nur bei der Ersteinrichtung
 on conflict do nothing;
 
 create table if not exists public.test_results (

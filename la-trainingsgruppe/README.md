@@ -3,7 +3,7 @@
 App für die Leichtathletik-Trainingsgruppe des Leichtathletik-Teams DSHS Köln.
 
 - **Öffnen:** `https://ole-niederluecke.github.io/Claude-Apps/la-trainingsgruppe/`
-- **Einrichtung** (Supabase-Datenbank, einmalig): siehe [`EINRICHTUNG.md`](EINRICHTUNG.md). Ohne Einrichtung gibt es einen Demo-Modus.
+- **Einrichtung** (einmalig): siehe [`EINRICHTUNG.md`](EINRICHTUNG.md). Das Handbuch für Admins steht in der App.
 
 ## Funktionen
 - Konten mit den Rollen Admin, Trainer und Athlet; neue Mitglieder werden freigeschaltet
@@ -22,7 +22,8 @@ App für die Leichtathletik-Trainingsgruppe des Leichtathletik-Teams DSHS Köln.
 | `app.js` | App-Logik (Ansichten, Rechte in der Oberfläche, Supabase- und Demo-Anbindung) |
 | `xlsx-plan.js` | Liest Excel-Dateien und erkennt die Struktur des Wochenplans |
 | `config.js` | Verbindung zum Supabase-Projekt (URL und öffentlicher Schlüssel) |
-| `supabase/*.sql` | Datenbank: Tabellen, Rechte-Regeln, Funktionen (der Reihe nach ausführen) |
+| `supabase/alles_in_einem.sql` | Datenbank: Tabellen, Rechte-Regeln, Funktionen – einmal komplett ausführen, auch bei jedem Update |
+| `supabase/0X_….sql` | dasselbe nach Themen aufgeteilt (Quelle für `alles_in_einem.sql`) |
 | `vendor/` | Supabase-Bibliothek (lokal eingebunden) |
 | `sw.js` | Offline-Cache der App-Hülle |
 | `logo.png`, `icon-*.png`, `apple-touch-icon.png`, `manifest.webmanifest` | Vereinslogo, App-Symbol und Installation |
