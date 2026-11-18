@@ -3,7 +3,7 @@
 App für die Leichtathletik-Trainingsgruppe des Leichtathletik-Teams DSHS Köln.
 
 - **Öffnen:** `https://ole-niederluecke.github.io/Claude-Apps/la-trainingsgruppe/`
-- **Einrichtung** (Supabase-Datenbank, einmalig): siehe [`EINRICHTUNG.md`](EINRICHTUNG.md). Ohne Einrichtung gibt es einen Demo-Modus.
+- **Einrichtung** (einmalig): siehe [`EINRICHTUNG.md`](EINRICHTUNG.md). Das Handbuch für Admins steht in der App.
 
 ## Funktionen
 - Konten mit den Rollen Admin, Trainer und Athlet; neue Mitglieder werden freigeschaltet

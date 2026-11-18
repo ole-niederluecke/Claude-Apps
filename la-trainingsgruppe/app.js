@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "18.11.2026 · 9";
+const VERSION = "18.11.2026 · 10";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -92,10 +92,10 @@ function setPref(k, v) { prefs[k] = v; LS.set("la_prefs", prefs); applyPrefs(); 
 
 /* ───────────── Backend: Supabase ───────────── */
 const BACKUP_TABLES = ["plan_groups", "plans", "plan_sheets", "exercises", "sessions", "session_weeks", "attendance", "attendance_private", "attendance_log",
-  "test_types", "norms", "athlete_info", "injuries", "test_results", "calendar_entries", "competition_results", "week_openings", "feedback"];
-const CONFLICT = { attendance: "session_id,user_id", attendance_private: "session_id,user_id", session_weeks: "week_start", athlete_info: "user_id", week_openings: "week_start" };
-const INSERT_ONLY = new Set(["session_weeks", "week_openings", "attendance_log"]); // nur ergänzen, nie überschreiben
-const ORDER = { feedback: ["created_at"], test_types: ["sort_order", "name"], calendar_entries: ["start_date"], test_results: ["test_date"], competition_results: ["comp_date"], injuries: ["start_date"] };
+  "test_types", "norms", "athlete_info", "injuries", "test_results", "calendar_entries", "competition_results", "week_openings", "feedback", "attendance_weekly"];
+const CONFLICT = { attendance_weekly: "user_id,week_start", attendance: "session_id,user_id", attendance_private: "session_id,user_id", session_weeks: "week_start", athlete_info: "user_id", week_openings: "week_start" };
+const INSERT_ONLY = new Set(["session_weeks", "week_openings", "attendance_log", "attendance_weekly"]); // nur ergänzen, nie überschreiben
+const ORDER = { attendance_weekly: ["week_start"], feedback: ["created_at"], test_types: ["sort_order", "name"], calendar_entries: ["start_date"], test_results: ["test_date"], competition_results: ["comp_date"], injuries: ["start_date"] };
 
 function makeSupabaseBackend(url, key) {
   const sb = window.supabase.createClient(url, key, {
@@ -137,6 +137,7 @@ function makeSupabaseBackend(url, key) {
       return p;
     },
     async deletePlan(id) { ok(await T("plans").delete().eq("id", id)); },
+    async updateSheet(id, patch) { return ok(await T("plan_sheets").update(patch).eq("id", id).select().single()); },
     // Übungen
     async exercises() { return ok(await T("exercises").select("*").order("name")); },
     async saveExercise(row) {
@@ -198,7 +199,8 @@ function makeSupabaseBackend(url, key) {
 function demoSeed() {
   const now = new Date().toISOString(), mon = mondayOf(todayIso());
   const g = (id, name, s) => ({ id, name, sort_order: s });
-  const p = (id, display_name, role, approved, plan_group_id) => ({ id, display_name, role, approved, plan_group_id, created_at: now });
+  const joined = new Date(Date.now() - 200 * 864e5).toISOString();
+  const p = (id, display_name, role, approved, plan_group_id) => ({ id, display_name, role, approved, plan_group_id, created_at: approved ? joined : now });
   const it = (text, ...details) => ({ text, details });
   const day = (d, info, title, items) => ({ day: d, info, title, titleDetails: [], items });
   const days = sprint => [
@@ -267,6 +269,7 @@ const DEMO_RULES = (() => {
     test_results: { read: "staffSelf", defaults: { note: "", value_left: null, value_right: null, entered_by: null },
       canWrite: (n, o, c) => c.staff || (n.user_id === c.me && c.test && c.test.entry === "self" && (!o || o.entered_by === c.me)) },
     calendar_entries: { read: "member", defaults: { end_date: null, location: "", note: "" }, canWrite: staffOnly },
+    attendance_weekly: { read: "staffSelf", defaults: { reasons: {} }, canWrite: () => false },
     feedback: { read: "adminSelf", defaults: { category: "idee", context: "", app_version: "", device: "", status: "neu", admin_note: "" },
       canWrite: (n, o, c) => c.admin || (n.user_id === c.me && (!o || (o.status === n.status && o.admin_note === n.admin_note))) },
     competition_results: { read: "member", defaults: { entry_id: null, place: "", wind: "", note: "", better: "lower", entered_by: null },
@@ -317,9 +320,34 @@ function demoPerformance(db) {
   return db;
 }
 
+// wie compact_attendance() in Teil 6: Trainings älter als 14 Tage → Wochenstatistik, danach löschen
+function demoCompact(db) {
+  const cutoff = addDays(todayIso(), -14), old = db.sessions.filter(s => s.session_date < cutoff);
+  if (!old.length) return;
+  db.attendance_weekly = db.attendance_weekly || [];
+  const people = db.profiles.filter(p => p.approved && (p.trains == null ? p.role === "athlete" : p.trains));
+  old.filter(s => !s.cancelled).forEach(s => people.forEach(p => {
+    if (String(p.created_at || "").slice(0, 10) > s.session_date) return;
+    const wk = mondayOf(s.session_date);
+    let w = db.attendance_weekly.find(x => x.user_id === p.id && x.week_start === wk);
+    if (!w) { w = { user_id: p.id, week_start: wk, counted: 0, attended: 0, n_yes: 0, n_no: 0, n_open: 0, n_late: 0, n_no_show: 0, n_flipped: 0, n_skipped: 0, reasons: {} }; db.attendance_weekly.push(w); }
+    const inj = (db.injuries || []).some(i => i.user_id === p.id && i.exclude_attendance && i.start_date <= s.session_date && (!i.end_date || i.end_date >= s.session_date));
+    if (inj) { w.n_skipped++; return; }
+    const a = db.attendance.find(x => x.session_id === s.id && x.user_id === p.id) || {}, pr = db.attendance_private.find(x => x.session_id === s.id && x.user_id === p.id);
+    w.counted++;
+    if ((a.status === "yes" && a.coach_mark !== "no_show") || a.coach_mark === "late") w.attended++;
+    if (a.status === "yes") w.n_yes++; else if (a.status === "no") { w.n_no++; const k = (pr && pr.reason) || "ohne Angabe"; w.reasons[k] = (w.reasons[k] || 0) + 1; } else w.n_open++;
+    if (a.coach_mark === "late") w.n_late++;
+    if (a.coach_mark === "no_show") w.n_no_show++;
+    if (a.status === "no" && db.attendance_log.some(l => l.session_id === s.id && l.user_id === p.id && l.status === "yes")) w.n_flipped++;
+  }));
+  const ids = new Set(old.map(s => s.id));
+  db.sessions = db.sessions.filter(s => !ids.has(s.id));
+  ["attendance", "attendance_private", "attendance_log"].forEach(k => db[k] = db[k].filter(r => !ids.has(r.session_id)));
+}
 function demoAutoOpen(settings, monday) { return autoOpenAt(settings, monday); }
 function makeDemoBackend() {
-  const KEY = "la_demo_db_v5";
+  const KEY = "la_demo_db_v6";
   let db = LS.get(KEY, null) || demoPerformance(demoSeed());
   const save = () => LS.set(KEY, db);
   const me = () => LS.get("la_demo_user", "u-admin");
@@ -393,13 +421,14 @@ function makeDemoBackend() {
     async planSheets(planId) {
       needMember();
       const mine = (meRow() || {}).plan_group_id;
-      return clone(db.plan_sheets.filter(s => s.plan_id === planId && (staff() || db.settings.plan_visibility === "all" || s.group_id === mine)).sort((a, b) => a.sort_order - b.sort_order));
+      return clone(db.plan_sheets.filter(s => s.plan_id === planId && (staff() || db.settings.plan_visibility === "all" || s.group_id === mine || (s.user_ids || []).includes(me()))).sort((a, b) => a.sort_order - b.sort_order));
     },
     async savePlan(plan, sheets) {
       needStaff();
       const p = Object.assign({ id: uid(), created_at: now(), created_by: me() }, plan); db.plans.push(p);
       sheets.forEach(s => db.plan_sheets.push(Object.assign({ id: uid() }, s, { plan_id: p.id }))); save(); return clone(p);
     },
+    async updateSheet(id, patch) { needStaff(); const s = db.plan_sheets.find(x => x.id === id); Object.assign(s, patch); save(); return clone(s); },
     async deletePlan(id) { needStaff(); db.plans = db.plans.filter(p => p.id !== id); db.plan_sheets = db.plan_sheets.filter(s => s.plan_id !== id); save(); },
     async exercises() { needMember(); return clone(db.exercises.slice().sort((a, b) => a.name.localeCompare(b.name, "de"))); },
     async saveExercise(row) {
@@ -424,6 +453,7 @@ function makeDemoBackend() {
     async deleteVideo() {},
     async ensureWeek(monday) {
       needMember();
+      demoCompact(db); save();
       if (db.session_weeks.some(w => w.week_start === monday)) return;
       db.session_weeks.push({ week_start: monday });
       (db.settings.session_template || []).forEach(t => db.sessions.push({ id: uid(), session_date: addDays(monday, t.dow - 1), start_time: t.time ? t.time + ":00" : null, title: "Training", location: t.location || "", note: "", cancelled: false, created_at: now() }));
@@ -525,7 +555,7 @@ const S = {
   be: null, user: null, me: null, profiles: [], emails: {}, groups: [], settings: null,
   plans: [], sheetCache: {}, exercises: [], sessions: [], att: [], priv: [], log: [],
   tab: LS.get("la_tab", "start"), authMode: "login", authMsg: null, recovery: false, loadError: null,
-  planView: "week", planWeek: null, planSheet: LS.get("la_sheet", null), exSearch: "", showPast: false, scrolledToday: false,
+  planView: "week", planWeek: null, sheetChoice: {}, exSearch: "", showPast: false, scrolledToday: false,
   tests: [], norms: [], results: [], ainfo: [], injuries: [], calendar: [], comps: [],
   stats: { loaded: false }, statRange: "4w", statSort: "name", perfView: null, enterTest: null, enterDate: null,
   termView: "training", moreView: "team", showPastCal: false, openings: [], feedback: [], fbFilter: "neu"
@@ -587,10 +617,13 @@ async function sheetsOf(plan) {
   if (!S.sheetCache[plan.id]) S.sheetCache[plan.id] = await S.be.planSheets(plan.id);
   return S.sheetCache[plan.id];
 }
+const sheetIsMine = s => (s.user_ids || []).includes(S.me.id);
 function defaultSheet(sheets) {
   if (!sheets.length) return null;
-  return sheets.find(s => s.name === S.planSheet) || sheets.find(s => s.group_id && s.group_id === S.me.plan_group_id) || sheets[0];
+  const chosen = S.sheetChoice[sheets[0].plan_id];
+  return sheets.find(s => s.id === chosen) || sheets.find(sheetIsMine) || sheets.find(s => s.group_id && s.group_id === S.me.plan_group_id) || sheets[0];
 }
+const sheetFor = s => [s.group_id && groupName(s.group_id), ...(s.user_ids || []).map(u => (person(u) || {}).display_name).filter(Boolean)].filter(Boolean).join(", ");
 const norm = s => String(s || "").toLowerCase().replace(/[\s.:;,/()\-–]+/g, "");
 function findExercise(text) {
   const t = norm(text); if (!t) return null;
@@ -785,7 +818,7 @@ function viewStart() {
     html += `<h2>Team</h2><div class="card"><div class="stats">
       <div class="stat"><b>${athletes.length}</b><span>Athleten</span></div>
       <div class="stat"><b>${athletes.filter(p => currentInjury(p.id)).length}</b><span>verletzt</span></div>
-      <div class="stat"><b>${S.exercises.length}</b><span>Übungen</span></div></div></div>`;
+      <div class="stat"><b>${S.profiles.filter(p => p.approved && isCoach(p)).length}</b><span>Trainer</span></div></div></div>`;
   }
   return html;
 }
@@ -811,26 +844,31 @@ function viewPlan() {
     ${plan.goal ? `<div class="small"><span class="muted">Ziel:</span> ${esc(plan.goal)}</div>` : ""}</div>`;
   if (!sheets.length) return html + `<div class="card muted">Für dich ist in diesem Plan kein Blatt freigegeben. Frag deinen Trainer, welcher Trainingsgruppe du zugeordnet bist.</div>`;
   const sh = defaultSheet(sheets);
-  if (sheets.length > 1) html += `<div class="chips" role="tablist">${sheets.map(s => `<button class="chipbtn" data-act="planSheet" data-name="${esc(s.name)}" aria-pressed="${s.id === sh.id}">${esc(s.name)}${s.group_id && s.group_id === S.me.plan_group_id ? " ★" : ""}</button>`).join("")}</div>`;
+  if (sheets.length > 1) html += `<div class="chips" role="tablist">${sheets.map(s => `<button class="chipbtn" data-act="planSheet" data-id="${esc(s.id)}" aria-pressed="${s.id === sh.id}">${esc(s.name)}${sheetIsMine(s) || (s.group_id && s.group_id === S.me.plan_group_id) ? " ★" : ""}</button>`).join("")}</div>`;
+  if (sheetIsMine(sh)) html += `<div class="notice" style="padding:10px 14px"><div class="grow small"><b>Dein persönlicher Plan</b>${sh.group_id ? "" : " – vom Trainer für dich zugeordnet"}</div></div>`;
+  if (isStaff()) html += `<div class="sheetfor small muted"><span class="grow">Blatt „${esc(sh.name)}“ für: <b>${esc(sheetFor(sh) || "niemanden zugeordnet")}</b></span><button class="linkbtn small" data-act="sheetAssign" data-id="${esc(sh.id)}">Zuordnung ändern</button></div>`;
+  html += renderDays(sh.data.days, mon, true);
+  if ((plan.extra_sheets || []).length) html += `<h2>Weitere Blätter</h2>` + plan.extra_sheets.map((x, i) => `<details class="card extra"><summary><b>${esc(x.name)}</b></summary>${gridTable(x.rows)}</details>`).join("");
+  return html;
+}
+function renderDays(days, mon, live) {
   const t = todayIso();
-  html += sh.data.days.map(d => {
-    const date = addDays(mon, d.day), sess = S.sessions.filter(s => s.session_date === date && !s.cancelled);
+  return days.map(d => {
+    const date = addDays(mon, d.day), sess = live ? S.sessions.filter(s => s.session_date === date && !s.cancelled) : [];
     const empty = !d.title && !d.items.length && !d.info;
-    return `<section class="daycard ${date === t ? "today" : ""} ${empty ? "empty" : ""}">
-      <div class="dayhead"><span class="dayname">${WDL[d.day]}</span><span class="muted small">${dm(date)}</span>
+    return `<section class="daycard ${live && date === t ? "today" : ""} ${empty ? "empty" : ""}">
+      <div class="dayhead"><span class="dayname">${WDL[d.day]}</span>${live ? `<span class="muted small">${dm(date)}</span>` : ""}
         ${d.info ? `<span class="chip">${esc(d.info)}</span>` : ""}${sess.length ? `<span class="chip solid">Training ${esc(hhmm(sess[0].start_time))}</span>` : ""}</div>
       ${d.title ? `<div class="daytitle">${esc(d.title)}</div>` : ""}
       ${(d.titleDetails || []).length ? `<div class="small muted">${d.titleDetails.map(esc).join(" · ")}</div>` : ""}
-      ${d.items.length ? `<ul class="items">${d.items.map((it, k) => {
-        const ex = findExercise(it.text);
-        return `<li class="${it.gap ? "gap" : ""}"><button class="item" data-act="itemInfo" data-text="${esc(it.text)}">
+      ${d.items.length ? `<ul class="items">${d.items.map(it => {
+        const ex = live ? findExercise(it.text) : null;
+        return `<li class="${it.gap ? "gap" : ""}"><button class="item" ${live ? `data-act="itemInfo" data-text="${esc(it.text)}"` : 'type="button" tabindex="-1"'}>
           <span class="it ${ex ? "known" : ""}">${esc(it.text)}${ex && (ex.video_path || ex.video_url) ? ` <span class="vid">${ICON.video}</span>` : ""}</span>
           ${it.details.length ? `<span class="det">${it.details.map(esc).join("<br>")}</span>` : ""}</button></li>`;
       }).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
     </section>`;
   }).join("");
-  if ((plan.extra_sheets || []).length) html += `<h2>Weitere Blätter</h2>` + plan.extra_sheets.map((x, i) => `<details class="card extra"><summary><b>${esc(x.name)}</b></summary>${gridTable(x.rows)}</details>`).join("");
-  return html;
 }
 function gridTable(rows) {
   const used = rows.filter(r => r.some(Boolean)); if (!used.length) return "";
@@ -924,11 +962,35 @@ function viewTraining() {
 /* ───── Mehr: Team + Einstellungen ───── */
 function viewMore() {
   const n = isStaff() ? pending().length : 0, nf = S.feedback.filter(f => f.status === "neu").length;
-  if (S.moreView === "feedback" && !isAdmin()) S.moreView = "team";
+  if ((S.moreView === "feedback" || S.moreView === "help") && !isAdmin()) S.moreView = "team";
   return `<div class="seg" style="margin-bottom:14px"><button data-act="moreView" data-v="team" aria-pressed="${S.moreView === "team"}">Team${n ? ` (${n})` : ""}</button>
     ${isAdmin() ? `<button data-act="moreView" data-v="feedback" aria-pressed="${S.moreView === "feedback"}">Feedback${nf ? ` (${nf})` : ""}</button>` : ""}
-    <button data-act="moreView" data-v="settings" aria-pressed="${S.moreView === "settings"}">Einstellungen</button></div>`
-    + (S.moreView === "settings" ? viewSettings() : S.moreView === "feedback" ? viewFeedbackAdmin() : viewTeam());
+    <button data-act="moreView" data-v="settings" aria-pressed="${S.moreView === "settings" || S.moreView === "help"}">Einstellungen</button></div>`
+    + (S.moreView === "settings" ? viewSettings() : S.moreView === "feedback" ? viewFeedbackAdmin() : S.moreView === "help" ? viewAdminHelp() : viewTeam());
+}
+function viewAdminHelp() {
+  if (!isAdmin()) return `<div class="card muted">Nur für Admins.</div>`;
+  const R = (t, a, tr, ad) => `<tr><td>${t}</td><td>${a ? "✓" : ""}</td><td>${tr ? "✓" : ""}</td><td>${ad ? "✓" : ""}</td></tr>`;
+  return `<div class="btns" style="margin:0 0 10px"><button class="btn ghost" data-act="moreView" data-v="settings">← Zurück zu den Einstellungen</button></div>
+  <div class="card helptext"><h3>Admin-Handbuch</h3><p class="small muted">Nur für Admins sichtbar.</p>
+  <h4>Rollen</h4><div class="tablewrap"><table class="grid roles"><tr><th></th><th>Athlet</th><th>Trainer</th><th>Admin</th></tr>
+    ${R("Wochenplan ansehen, zu-/absagen, eigene Werte", 1, 1, 1)}${R("Übungen anlegen, Wettkampfergebnisse eintragen", 1, 1, 1)}
+    ${R("Absagegründe, Verlauf, Statistik sehen", 0, 1, 1)}${R("Freischalten, Gruppen zuordnen, Plan hochladen", 0, 1, 1)}
+    ${R("Woche öffnen, Termine, Tests, Normen, Verletzungen", 0, 1, 1)}${R("Rollen vergeben, Teamname, Backup, Feedback", 0, 0, 1)}</table></div>
+  <h4>Neue Mitglieder</h4><p>Wer den Link hat, kann sich registrieren, sieht aber nichts, bis ein Trainer oder Admin ihn unter <b>Mehr → Team</b> freischaltet. Schalte nur Leute frei, die du kennst. Trainer bekommen ihre Rolle im Profil (Name antippen → Rolle).</p>
+  <h4>Trainingsanmeldung</h4><p>Athleten können erst zu-/absagen, wenn die Woche geöffnet ist („Jetzt öffnen“ unter Termine, oder automatisch unter Einstellungen → Trainingsanmeldung). Trainer sagen nicht zu, können aber „Ich bin nicht da“ eintragen. Wer als Admin/Trainer selbst trainiert, setzt in „Mein Konto“ den Haken „Ich trainiere selbst mit“.</p>
+  <h4>Alte Trainings</h4><p>Trainings, die älter als 14 Tage sind, werden automatisch zu einer Wochenstatistik pro Person zusammengefasst (zugesagt, abgesagt, keine Antwort, zu spät, nicht erschienen, umentschieden, Anzahl je Absagegrund). Danach werden die einzelnen Termine samt Absagegründen und Freitext gelöscht. Die Statistik bleibt vollständig, gespeichert wird aber nur das Nötigste.</p>
+  <h4>Datenmenge</h4><p>Die kostenlose Supabase-Stufe hat 500 MB Datenbank und 1 GB für Videos. Eine Trainingsgruppe mit 25 Personen braucht pro Jahr grob 1–3 MB: Wochenpläne etwa 20 KB pro Upload, Testwerte und Wochenstatistik nur wenige KB. Das reicht für viele Jahre. Platz brauchen nur hochgeladene Videos, rund 5–30 MB pro Clip.</p>
+  <h4>Backup</h4><p>Supabase macht in der kostenlosen Stufe keine automatischen Backups. Lade regelmäßig unter Einstellungen → Admin → Backup eine Sicherung herunter. Videos sind nicht enthalten.</p>
+  <h4>Supabase pausiert</h4><p>Nach etwa 7 Tagen ohne Nutzung pausiert das kostenlose Projekt (z. B. in den Ferien). Dann im Supabase-Dashboard auf <b>Restore</b> klicken. Die Daten bleiben erhalten.</p>
+  <h4>Datenschutz und Sicherheit</h4>
+  <p>Im öffentlichen GitHub-Repository liegt nur der <b>Programmcode</b>, keine Daten. Konten, Pläne, Zu-/Absagen, Testwerte, Verletzungen und Feedback liegen nur in der Supabase-Datenbank.</p>
+  <p>Die Project URL und der publishable Key in <code>config.js</code> sind öffentlich. Ohne freigeschaltetes Konto kommt man trotzdem an nichts heran, weil die Datenbank die Rechte bei jeder Anfrage selbst prüft.</p>
+  <p>Der <b>secret- bzw. service_role-Key</b> aus Supabase umgeht alle Regeln. Er gehört nie ins Repo, in die App oder in einen Chat.</p>
+  <p>Verletzungen sind Gesundheitsdaten. Sichtbar sind sie nur für Trainer, Admins und die Person selbst. Sag neuen Mitgliedern kurz, was gespeichert wird und wer es sieht.</p>
+  <h4>Updates</h4><p>Kommt eine neue Version mit einer SQL-Datei (<code>supabase/0X_….sql</code>), diese <b>vor</b> dem Mergen im Supabase SQL Editor ausführen. Danach in der App unter Einstellungen → Version → Aktualisieren.</p>
+  </div>
+  <div class="card helptext">${planFormatHtml()}</div>`;
 }
 const FB_CAT = { fehler: "Fehler", idee: "Idee", sonstiges: "Sonstiges" };
 const TAB_LABEL = { start: "Start", plan: "Plan", termine: "Termine", leistung: "Leistung", settings: "Mehr" };
@@ -1044,6 +1106,8 @@ function viewSettings() {
       <label class="opt"><input type="checkbox" data-change="betaToggle" ${s.beta !== false ? "checked" : ""}><span><b>Beta-Phase</b><span class="small muted">Zeigt „Beta“ in der Kopfzeile. Ein Tipp darauf öffnet das Feedback-Formular.</span></span></label>
       <form data-form="teamname"><label class="f"><span>Name der Trainingsgruppe</span><input type="text" name="name" required maxlength="60" value="${esc(s.team_name || "")}"></label>
       <button class="btn sm ghost">Speichern</button></form></div>
+      <div class="card"><h3>Admin-Handbuch</h3><p class="small muted">Rollen, Abläufe, Datenschutz, Datenmenge, Supabase. Nur für Admins sichtbar.</p>
+      <button class="btn ghost" data-act="moreView" data-v="help">Handbuch öffnen</button></div>
       <div class="card"><h3>Backup</h3>
       <p class="small muted">Sichert Einstellungen, Trainingsgruppen, Rollen, Pläne, Übungen, Termine und Zu-/Absagen als Datei. Videos sind nicht enthalten. Beim Wiederherstellen werden diese Werte zurückgeschrieben; Konten werden dabei weder angelegt noch gelöscht.</p>
       <div class="btns"><button class="btn" data-act="backup">Backup herunterladen</button>
@@ -1119,10 +1183,16 @@ function normStatus(u) {
   return { met, total, missing, exempt };
 }
 function attendanceStats(u, sessions, att) {
-  const t = todayIso(), hm = nowHm();
+  const t = todayIso(), hm = nowHm(), joined = String((person(u) || {}).created_at || "").slice(0, 10);
   const res = { counted: 0, attended: 0, yes: 0, no: 0, open: 0, late: 0, noShow: 0, flipped: 0, excluded: 0, reasons: {} };
+  (S.stats.weekly || []).filter(w => w.user_id === u && w.week_start >= mondayOf(S.stats.from || t)).forEach(w => {
+    res.counted += w.counted; res.attended += w.attended; res.yes += w.n_yes; res.no += w.n_no; res.open += w.n_open;
+    res.late += w.n_late; res.noShow += w.n_no_show; res.flipped += w.n_flipped; res.excluded += w.n_skipped;
+    Object.entries(w.reasons || {}).forEach(([k, v]) => res.reasons[k] = (res.reasons[k] || 0) + Number(v));
+  });
   sessions.forEach(s => {
     if (s.cancelled || s.session_date > t || (s.session_date === t && s.start_time && hhmm(s.start_time) > hm)) return;
+    if (joined && s.session_date < joined) return;
     if (injuredOn(u, s.session_date, "exclude_attendance")) { res.excluded++; return; }
     res.counted++;
     const a = att.find(x => x.session_id === s.id && x.user_id === u);
@@ -1148,7 +1218,8 @@ async function loadStats() {
     const [a, p, l] = await Promise.all([S.be.attendance(part), S.be.attendancePrivate(part), S.be.attendanceLog(part)]);
     att.push(...a); priv.push(...p); log.push(...l);
   }
-  S.stats = { from, sessions, att, priv, log, loaded: true };
+  const weekly = await S.be.list("attendance_weekly");
+  S.stats = { from, sessions, att, priv, log, weekly, loaded: true };
 }
 const RUN_RE = /^\s*(\d+\s*x\s*)?\d+(\s*m)?\b|hürden|huerden|lauf|staffel|gehen|cross/i;
 const betterFor = disc => /(weit|hoch|stab|drei|kugel|diskus|speer|hammer|ball|kampf|punkte)/i.test(disc) ? "higher" : RUN_RE.test(disc) ? "lower" : "higher";
@@ -1752,6 +1823,23 @@ function itemSheet(text) {
 }
 
 /* ───── Plan-Import ───── */
+function planFormatHtml() {
+  return `<h3>So liest die App den Plan</h3><div class="helptext">
+  <p><b>Datei:</b> Excel (.xlsx). In Numbers über Ablage → Exportieren → Excel.</p>
+  <p><b>Ein Blatt pro Gruppe oder Programm</b>, z. B. Kurzsprint, Langsprint, Stab, Alternativplan … Der Blattname erscheint so in der App.</p>
+  <p><b>Wochentage:</b> Eine Zeile mit <i>Montag, Dienstag … Sonntag</i>, jeder Tag in einer eigenen Spalte. Die Zeile muss in den ersten 30 Zeilen stehen.</p>
+  <p><b>Über den Wochentagen</b> (optional): Saison in der ersten Zelle, z. B. „Wintersaison“, und „Ziel:“ mit dem Ziel daneben oder darunter.</p>
+  <p><b>Unter jedem Wochentag</b>, von oben nach unten in derselben Spalte:</p>
+  <ol><li>Ort und Uhrzeit oder Status, z. B. „LAA (17:25)“, „Pause“, „Regeneration“, „Optional“</li>
+  <li>Tagesthema, z. B. „Kraft Beine“</li>
+  <li>Übungen, jede in eine eigene Zelle. Die Belastung kommt in die Zelle <b>direkt darunter</b> (z. B. „3x5“, „max“, „Min 10“, „P: 6 min“, „Jungs 7,4-7,6s“). Mehrere Belastungszeilen untereinander sind möglich.</li>
+  <li>Eine Leerzeile beginnt einen neuen Block.</li></ol>
+  <p><b>Abkürzungen:</b> Ein Blatt mit „Abkürzungen“ im Namen, Spalte A die Abkürzung, Spalte B die Bedeutung. Es wird in die Übungssammlung übernommen.</p>
+  <p><b>Andere Blätter</b> ohne Wochentagszeile (z. B. „Übungen“, „Turnhalle“) erscheinen als Tabelle unter dem Plan.</p>
+  <p><b>Bitte nicht:</b> zwei Tage in einer Spalte, Übung und Belastung nebeneinander in zwei Spalten, Bilder oder Textfelder (werden ignoriert). Zusammengeführte Zellen gehen, der Text steht dann in der ersten Zelle.</p>
+  <p><b>Alternativpläne:</b> Beim Hochladen kann jedes Blatt einer Gruppe <i>und/oder einzelnen Personen</i> zugeordnet werden. Wer verletzt ist, bleibt in seiner Gruppe und sieht das Alternativblatt zuerst. Die Zuordnung lässt sich später im Plan unter „Zuordnung ändern“ anpassen.</p>
+  <p>Vor dem Speichern zeigt „Vorschau“ bei jedem Blatt, wie die App es gelesen hat.</p></div>`;
+}
 let IMPORT = null;
 function defaultImportWeek() { const t = todayIso(), mon = mondayOf(t); return dowOf(t) >= 4 ? addDays(mon, 7) : mon; }
 function importSheet() {
@@ -1772,11 +1860,19 @@ function importSheet() {
       <div class="small muted" style="margin:10px 0 6px">Welches Blatt gehört zu welcher Trainingsgruppe?</div>
       ${r.plans.map((p, i) => {
         const match = S.groups.find(g => norm(g.name) === norm(p.name));
-        return `<div class="maprow"><span class="grow"><b>${esc(p.name)}</b><span class="small muted" style="display:block">${p.days.filter(d => d.items.length).length} Tage mit Programm</span></span>
-          <select name="map${i}" aria-label="Trainingsgruppe für ${esc(p.name)}"><option value="">– keine –</option>
+        const words = p.name.toLowerCase().split(/[^a-zäöüß]+/).filter(w => w.length >= 3);
+        const named = trainees().filter(u => words.includes(firstName(u.display_name).toLowerCase()));
+        const alt = /altern|reha|verletz|individ/i.test(p.name);
+        const days = p.days.filter(d => d.items.length).length, items = p.days.reduce((n, d) => n + d.items.length, 0);
+        return `<div class="maprow"><span class="grow"><b>${esc(p.name)}</b><span class="small muted" style="display:block">${days} Tage, ${items} Übungen erkannt</span></span>
+          <select name="map${i}" aria-label="Trainingsgruppe für ${esc(p.name)}"><option value="">– keine Gruppe –</option>
           ${S.groups.map(g => `<option value="${esc(g.id)}" ${match && match.id === g.id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}
-          <option value="__new" ${match ? "" : "selected"}>+ Neue Gruppe „${esc(p.name)}“</option></select></div>`;
+          <option value="__new" ${match || alt ? "" : "selected"}>+ Neue Gruppe „${esc(p.name)}“</option></select></div>
+          <details class="mapmore" ${named.length || alt ? "open" : ""}><summary class="small">Für einzelne Personen${named.length ? ` (${named.length} erkannt)` : ""}</summary>
+            <div class="checks personlist">${trainees().sort(byName).map(u => `<label><input type="checkbox" name="u${i}" value="${esc(u.id)}" ${named.includes(u) ? "checked" : ""}> ${esc(u.display_name)} <span class="muted small">${esc(groupName(u.plan_group_id) || "")}${currentInjury(u.id) ? " · verletzt" : ""}</span></label>`).join("")}</div></details>
+          <details class="mapmore"><summary class="small">Vorschau: so wird das Blatt gelesen</summary><div class="preview">${renderDays(p.days, mondayOf(todayIso()), false)}</div></details>`;
       }).join("")}
+      <p class="small"><button type="button" class="linkbtn small" data-act="planFormat">Wie muss der Plan aufgebaut sein?</button></p>
       ${r.extras.length ? `<p class="small muted" style="margin-top:10px">Weitere Blätter werden unter dem Plan angezeigt: ${r.extras.map(x => esc(x.name)).join(", ")}</p>` : ""}
       ${newAbk.length ? `<label class="opt"><input type="checkbox" name="abk" checked><span><b>${newAbk.length} Abkürzungen in die Übungssammlung übernehmen</b><span class="small muted">${esc(newAbk.map(a => a.abbreviation).join(", "))}</span></span></label>` : ""}
       ${existing ? `<p class="small" style="margin-top:8px">Für diese Woche gibt es schon den Plan „${esc(existing.title)}“. Der neue Plan ersetzt ihn.</p>` : ""}
@@ -1804,7 +1900,18 @@ const actions = {
   // Plan
   planView(el) { S.planView = el.dataset.v; render(); },
   planWeek(el) { S.planWeek = addDays(S.planWeek || mondayOf(todayIso()), Number(el.dataset.d)); S.scrolledToday = false; render(); },
-  planSheet(el) { S.planSheet = el.dataset.name; LS.set("la_sheet", S.planSheet); render(); },
+  planSheet(el) { const p = planForWeek(S.planWeek || mondayOf(todayIso())); if (p) S.sheetChoice[p.id] = el.dataset.id; render(); },
+  planFormat() { sheet(planFormatHtml() + `<div class="btns"><button class="btn ghost block" data-act="${IMPORT ? "importBack" : "closeSheet"}">${IMPORT ? "Zurück zum Hochladen" : "Schließen"}</button></div>`); },
+  importBack() { importSheet(); },
+  sheetAssign(el) {
+    const p = planForWeek(S.planWeek || mondayOf(todayIso())), sh = (S.sheetCache[p.id] || []).find(x => x.id === el.dataset.id);
+    sheet(`<h3>Blatt zuordnen</h3><p class="small muted">„${esc(sh.name)}“ · ${esc(p.title || "Wochenplan")}</p>
+      <form data-form="sheetAssign" data-id="${esc(sh.id)}" data-plan="${esc(p.id)}">
+        <label class="f"><span>Trainingsgruppe</span><select name="group"><option value="">– keine –</option>${S.groups.map(g => `<option value="${esc(g.id)}" ${g.id === sh.group_id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}</select></label>
+        <div class="small muted" style="margin:4px 0 6px">Zusätzlich für einzelne Personen (z. B. Alternativplan bei Verletzung). Sie sehen dieses Blatt zuerst, bleiben aber in ihrer Trainingsgruppe.</div>
+        <div class="checks personlist">${trainees().sort(byName).map(u => `<label><input type="checkbox" name="u" value="${esc(u.id)}" ${(sh.user_ids || []).includes(u.id) ? "checked" : ""}> ${esc(u.display_name)} <span class="muted small">${esc(groupName(u.plan_group_id) || "")}${currentInjury(u.id) ? " · verletzt" : ""}</span></label>`).join("")}</div>
+        <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>`);
+  },
   openPlanToday() { S.tab = "plan"; S.planView = "week"; S.planWeek = null; S.scrolledToday = false; LS.set("la_tab", "plan"); render(); },
   openPlan(el) { const p = S.plans.find(x => x.id === el.dataset.id); S.planWeek = p.valid_from; S.planView = "week"; render(); scrollTo(0, 0); },
   planUpload() { $("#plan-file").click(); },
@@ -2069,6 +2176,8 @@ async function restoreBackup(data) {
     await S.be.upsert("competition_results", (tables.competition_results || []).filter(keepUser).map(c => fixRef(c, "entered_by")));
     await S.be.upsert("week_openings", (tables.week_openings || []).map(w => fixRef(w, "opened_by")));
     await S.be.upsert("feedback", (tables.feedback || []).filter(keepUser));
+    await S.be.upsert("attendance_weekly", (tables.attendance_weekly || []).filter(keepUser));
+    await S.be.upsert("plan_sheets", (tables.plan_sheets || []).map(s => Object.assign({}, s, { group_id: mapG(s.group_id), user_ids: (s.user_ids || []).filter(u => known.has(u)) })));
   }
   const rows = data.profiles.slice().sort((a, b) => (b.role === "admin") - (a.role === "admin"));
   for (const p of rows) {
@@ -2083,6 +2192,11 @@ async function restoreBackup(data) {
 }
 
 const forms = {
+  async sheetAssign(f) {
+    const ids = [...f.querySelectorAll("[name=u]:checked")].map(x => x.value);
+    await S.be.updateSheet(f.dataset.id, { group_id: f.group.value || null, user_ids: ids });
+    delete S.sheetCache[f.dataset.plan]; closeSheet(); await sheetsOf(S.plans.find(p => p.id === f.dataset.plan)); render(); toast("Zuordnung gespeichert");
+  },
   async connect(f) {
     const url = f.url.value.trim().replace(/\/+$/, ""), key = f.key.value.trim();
     if (!/^https:\/\/.+/.test(url)) return toast("Die URL muss mit https:// beginnen.", "error");
@@ -2188,7 +2302,8 @@ const forms = {
         const ex = S.groups.find(g => norm(g.name) === norm(p.name));
         gid = ex ? ex.id : (await S.be.insertGroup({ name: p.name.slice(0, 60), sort_order: ++max })).id;
       }
-      sheets.push({ name: p.name, group_id: gid, sort_order: i + 1, data: { days: p.days } });
+      const uids = [...f.querySelectorAll(`[name=u${i}]:checked`)].map(x => x.value);
+      sheets.push({ name: p.name, group_id: gid, user_ids: uids, sort_order: i + 1, data: { days: p.days } });
     }
     const p0 = r.plans[0];
     await S.be.savePlan({ valid_from: week, title: f.title.value.trim(), season: p0.season || "", goal: p0.goal || "", source_name: r.file, extra_sheets: r.extras.filter(x => !/abk/i.test(x.name)).map(x => ({ name: x.name, rows: x.rows })) }, sheets);
