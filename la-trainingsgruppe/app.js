@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "19.11.2026 · 13";
+const VERSION = "19.11.2026 · 14";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -718,6 +718,7 @@ function nextSession() {
 /* ───────────── Ansichten ───────────── */
 const svg = (p, sw = 1.9) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
 const ICON = {
+  clock: svg('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M10 2h4"/>'),
   start: svg('<path d="M3.5 10.5 12 4l8.5 6.5V20a1 1 0 0 1-1 1H15v-6H9v6H4.5a1 1 0 0 1-1-1z"/>'),
   plan: svg('<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M8.5 10h7M8.5 14h7M8.5 18h4"/>'),
   termine: svg('<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/>'),
@@ -785,7 +786,7 @@ function viewNav() {
   const n = (isStaff() ? pending().length : 0) + (isAdmin() ? S.feedback.filter(f => f.status === "neu").length : 0);
   const ns = nextSession(), myOpen = (ns && trainsP(S.me) && weekOpen(mondayOf(ns.session_date)) && !attOf(ns.id, S.me.id)?.status) || pendingInvites().length ? 1 : 0;
   const b = (id, label, badge) => `<button data-act="tab" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ""}>${ICON[id]}${label}${badge ? `<span class="badge">${badge}</span>` : ""}</button>`;
-  return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Plan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("leistung", "Leistung")}${b("settings", "Mehr", n)}</div></nav>`;
+  return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Trainingsplan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("leistung", "Leistung")}${b("settings", "Mehr", n)}</div></nav>`;
 }
 function viewMessage(title, text, actions) {
   return `<div class="auth"><div class="brand"><img src="logo.png" alt="Logo Leichtathletik-Team DSHS Köln"><h1>${title}</h1></div><div class="card"><p>${text}</p>${actions}</div></div>`;
@@ -907,7 +908,6 @@ function viewPlan() {
   if (sheetIsMine(sh)) html += `<div class="notice" style="padding:10px 14px"><div class="grow small"><b>Dein persönlicher Plan</b>${sh.group_id ? "" : " – vom Trainer für dich zugeordnet"}</div></div>`;
   if (isStaff()) html += `<div class="sheetfor small muted"><span class="grow">Blatt „${esc(sh.name)}“ für: <b>${esc(sheetFor(sh) || "niemanden zugeordnet")}</b></span><button class="linkbtn small" data-act="sheetAssign" data-id="${esc(sh.id)}">Zuordnung ändern</button></div>`;
   html += renderDays(sh.data.days, mon, true);
-  if ((plan.extra_sheets || []).length) html += `<h2>Weitere Blätter</h2>` + plan.extra_sheets.map((x, i) => `<details class="card extra"><summary><b>${esc(x.name)}</b></summary>${gridTable(x.rows)}</details>`).join("");
   return html;
 }
 // Ort/Uhrzeit aus dem Plan und der Termin werden zu einem Chip ("LAA · 17:55")
@@ -936,6 +936,9 @@ function itemGroups(d) {
     if (b.length % 2 === 0) for (let i = 0; i < b.length; i += 2) out.push({ items: b.slice(i, i + 2), pair: true });
     else out.push({ items: b, pair: true });
   });
+  // Blöcke am Krafttag mit Buchstaben: A1/A2 = Supersatz, C = einzelne Übung
+  let n = 0;
+  out.forEach(g => { if (g.warmup) return; const L = String.fromCharCode(65 + n++); g.labels = g.items.length > 1 ? g.items.map((_, i) => L + (i + 1)) : [L]; });
   return out;
 }
 // Zeilen wie „Djamil & Ole“ oder „Alternativ Biene“ sind Hinweise, für wen die folgenden Übungen gelten
@@ -947,6 +950,22 @@ function itemKind(text) {
   if (words.length && words.length <= 6 && words.every(w => first.has(w))) return "who";
   return "";
 }
+// Eine Übung: Name links, Umfang groß rechts, darunter Zusätze, Pausen, Zielzeiten, Teilübungen
+function itemHtml(it, live, label) {
+  const kind = itemKind(it.text);
+  if (kind === "or") return `<div class="itemlabel">oder</div>`;
+  if (kind === "who" && !it.details.length) return `<div class="itemlabel who">${esc(it.text)}</div>`;
+  const rx = PlanFormat.formatRx(it.details, it.text);
+  const ex = live ? findExercise(it.text) : null;
+  const chips = [...rx.tags.map(t => `<span class="rxchip">${esc(t)}</span>`), ...rx.rest.map(t => `<span class="rxchip rest">${ICON.clock || ""}${esc(t)}</span>`)].join("");
+  const sub = (chips ? `<span class="rxchips">${chips}</span>` : "")
+    + (rx.targets.length ? `<span class="rxtargets">${rx.targets.map(t => `<span class="rxt"><span class="who">${esc(t.who)}</span><span>${esc(t.value)}</span></span>`).join("")}</span>` : "")
+    + (rx.steps.length ? `<span class="rxsteps">${rx.steps.map((st, i) => `<span><b>${i + 1}</b>${esc(st)}</span>`).join("")}</span>` : "")
+    + (rx.notes.length ? `<span class="rxnote">${rx.notes.map(esc).join(" · ")}</span>` : "");
+  return `<button class="item${/^alternativ\b/i.test(it.text) ? " altitem" : ""}" ${live ? `data-act="itemInfo" data-text="${esc(it.text)}"` : 'type="button" tabindex="-1"'}>
+    ${label ? `<span class="ix">${label}</span>` : ""}<span class="ibody"><span class="irow"><span class="it ${ex ? "known" : ""}">${esc(rx.title || it.text)}${ex && (ex.video_path || ex.video_url) ? ` <span class="vid">${ICON.video}</span>` : ""}</span>
+    ${rx.main ? `<span class="rx">${esc(rx.main)}</span>` : ""}</span>${sub}</span></button>`;
+}
 function renderDays(days, mon, live) {
   const t = todayIso();
   return days.map(d => {
@@ -957,15 +976,7 @@ function renderDays(days, mon, live) {
         ${dayChips(d.info, sess)}</div>
       ${d.title ? `<div class="daytitle">${esc(d.title)}</div>` : ""}
       ${(d.titleDetails || []).length ? `<div class="small muted">${d.titleDetails.map(esc).join(" · ")}</div>` : ""}
-      ${d.items.length ? `<ul class="items">${itemGroups(d).map(g => `<li class="grp ${g.pair ? "pair" : ""} ${g.warmup ? "warmup" : ""}">${g.warmup ? '<span class="wutag">Aufwärmen</span>' : ""}${g.items.map(it => {
-        const kind = itemKind(it.text);
-        if (kind === "or") return `<div class="itemlabel">oder</div>`;
-        if (kind === "who" && !it.details.length) return `<div class="itemlabel who">${esc(it.text)}</div>`;
-        const ex = live ? findExercise(it.text) : null;
-        return `<button class="item${/^alternativ\b/i.test(it.text) ? " altitem" : ""}" ${live ? `data-act="itemInfo" data-text="${esc(it.text)}"` : 'type="button" tabindex="-1"'}>
-          <span class="it ${ex ? "known" : ""}">${esc(it.text)}${ex && (ex.video_path || ex.video_url) ? ` <span class="vid">${ICON.video}</span>` : ""}</span>
-          ${it.details.length ? `<span class="det">${it.details.map(esc).join("<br>")}</span>` : ""}</button>`;
-      }).join("")}</li>`).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
+      ${d.items.length ? `<ul class="items">${itemGroups(d).map(g => `<li class="grp ${g.pair ? "pair" : ""} ${g.warmup ? "warmup" : ""}">${g.warmup ? '<span class="wutag">Aufwärmen</span>' : g.pair ? `<span class="wutag">${g.items.length === 2 ? "Supersatz" : g.items.length + "er-Block"}</span>` : ""}${g.items.map((it, i) => itemHtml(it, live, g.labels && g.labels[i])).join("")}</li>`).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
     </section>`;
   }).join("");
 }
@@ -1000,13 +1011,6 @@ function viewExercises() {
 }
 
 /* ───── Termine ───── */
-// Für Trainer/Admins direkt auf der Karte: wer abgesagt hat und warum
-function absentLine(s) {
-  const no = rosterOf(s).filter(p => { const a = attOf(s.id, p.id); return a && a.status === "no"; });
-  if (!no.length) return "";
-  return `<div class="small absentline"><b>Abgesagt:</b> ${no.map(p => { const pr = privOf(s.id, p.id);
-    return esc(p.display_name.split(" ")[0]) + (pr && (pr.reason || pr.note) ? ` <span class="muted">(${esc([REASONS[pr.reason], pr.note].filter(Boolean).join(": "))})</span>` : ""); }).join(", ")}</div>`;
-}
 function sessionCard(s, compact) {
   const a = attOf(s.id, S.me.id), pr = privOf(s.id, S.me.id), c = countsOf(s);
   const head = `<div class="sesshead"><div class="sessdate"><b>${WD[dowOf(s.session_date)]}</b><span>${dm(s.session_date)}</span></div>
@@ -1017,8 +1021,7 @@ function sessionCard(s, compact) {
   const past = s.session_date < todayIso(), open = weekOpen(mondayOf(s.session_date));
   const away = coachesAway(s);
   const awayLine = away.length ? `<div class="small awayline">Nicht da: ${away.map(p => { const pr2 = privOf(s.id, p.id); return esc(p.display_name) + (isStaff() && pr2 && (pr2.reason || pr2.note) ? ` (${esc([REASONS[pr2.reason], pr2.note].filter(Boolean).join(": "))})` : ""); }).join(", ")}</div>` : "";
-  const counts = `<button class="counts" data-act="sessOpen" data-id="${esc(s.id)}"><span><b>${c.yes}</b> dabei</span><span><b>${c.no}</b> abgesagt</span><span><b>${c.open}</b> offen</span>${ICON.chev}</button>`
-    + (isStaff() ? absentLine(s) : "");
+  const counts = `<div class="counts">${[["yes", c.yes, "dabei"], ["no", c.no, "abgesagt"], ["open", c.open, "offen"]].map(([g, n, l]) => `<button data-act="sessOpen" data-id="${esc(s.id)}" data-g="${g}"><b>${n}</b> ${l}</button>`).join("")}</div>`;
   if (isCoach(S.me)) {
     const meAway = a && a.status === "no";
     return `<div class="card sess">${head}${awayLine}${past ? "" : `<div class="resp one">${meAway
@@ -1104,7 +1107,7 @@ function viewAdminHelp() {
   <div class="card helptext">${planFormatHtml()}</div>`;
 }
 const FB_CAT = { fehler: "Fehler", idee: "Idee", sonstiges: "Sonstiges" };
-const TAB_LABEL = { start: "Start", plan: "Plan", termine: "Termine", leistung: "Leistung", settings: "Mehr" };
+const TAB_LABEL = { start: "Start", plan: "Trainingsplan", termine: "Termine", leistung: "Leistung", settings: "Mehr" };
 function fbItem(f, admin) {
   const who = (person(f.user_id) || {}).display_name || "Unbekannt";
   const when = new Date(f.created_at).toLocaleString("de-DE", { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -1450,8 +1453,8 @@ function viewLeistung() {
   if (S.perfView === "enter") return html + viewEnter();
   return html + viewOverview();
 }
-// Fließende Farbskala: Rot → Orange → Gelb → ab 75 % hellgrün → 100 % dunkelgrün
-const RATE_STOPS = [[0, [208, 59, 59]], [50, [236, 131, 90]], [65, [250, 178, 25]], [75, [150, 200, 90]], [100, [24, 120, 56]]];
+// Fließende Farbskala: Rot → Orange (25 %) → Gelb (45 %) → ab 75 % hellgrün → 100 % dunkelgrün
+const RATE_STOPS = [[0, [208, 59, 59]], [25, [236, 131, 90]], [45, [250, 178, 25]], [75, [150, 200, 90]], [100, [24, 120, 56]]];
 function rateColor(r) {
   if (r == null) return "var(--line)";
   r = Math.max(0, Math.min(100, r));
@@ -1461,7 +1464,7 @@ function rateColor(r) {
 }
 const rateDot = r => `<i class="ratedot" style="background:${rateColor(r)}"></i>`;
 const rateBar = (r, big) => `<span class="bar${big ? " big" : ""}" aria-hidden="true"><i style="width:${r ?? 0}%;background:${rateColor(r)}"></i></span>`;
-const RATE_LEGEND = `<div class="ratelegend small muted"><span class="rategrad" aria-hidden="true"></span><span class="rateticks"><span>0 %</span><span>50</span><span>75</span><span>100 %</span></span></div>`;
+const RATE_LEGEND = `<div class="ratelegend small muted"><span class="rategrad" aria-hidden="true"></span><span class="rateticks"><span>0 %</span><span>45</span><span>75</span><span>100 %</span></span></div>`;
 // Eigene Trainingsbeteiligung für Athleten
 function myAttendanceCard() {
   if (!S.stats.loaded || S.stats.from !== addDays(todayIso(), -STAT_RANGES[S.statRange][1])) {
@@ -1498,7 +1501,7 @@ function viewOverview() {
     <div class="card flush overview">${sorted.map(({ p, a, n, inj }) => `<button class="row" data-act="athleteOpen" data-id="${esc(p.id)}">
       <span class="grow"><span class="name">${esc(p.display_name)} ${inj ? '<span class="chip off">verletzt</span>' : ""}</span>
       <span class="meta">${esc(groupName(p.plan_group_id) || "keine Gruppe")}${a.counted ? ` · ${a.attended}/${a.counted} Trainings` : ""}${a.flipped ? ` · ${a.flipped}× umentschieden` : ""}${a.late ? ` · ${a.late}× zu spät` : ""}</span>
-      ${reasonSummary(a) ? `<span class="meta">Abgesagt: ${reasonSummary(a)}</span>` : ""}
+
       ${rateBar(a.rate, true)}</span>
       <span class="statcol"><b>${rateDot(a.rate)}${a.rate == null ? "–" : a.rate + " %"}</b><span class="small muted">${n.total || n.missing ? `Normen ${n.met}/${n.total + n.missing}` : "keine Norm"}</span></span>
       <span class="chev">${ICON.chev}</span></button>`).join("") || `<div class="row muted">Noch keine Athleten</div>`}</div>
@@ -1999,7 +2002,10 @@ function absageSheet(sid, uidFor) {
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Absagen</button></div></form>`);
 }
 
-function sessionSheet(sid) {
+function sessionSheet(sid, focus) {
+  // gewählte Liste merken, damit „Zurück“ aus der Personenansicht dort wieder landet
+  focus = focus || (S.sessFocus && S.sessFocus.sid === sid ? S.sessFocus.g : "yes");
+  S.sessFocus = { sid, g: focus };
   const s = S.sessions.find(x => x.id === sid); if (!s) return;
   const roster = rosterOf(s), staff = isStaff();
   const groups = { yes: [], no: [], open: [] };
@@ -2013,10 +2019,12 @@ function sessionSheet(sid) {
     const inner = `<span class="avatar ${p.role}">${esc(initials(p.display_name))}</span><span class="grow"><span class="name">${esc(p.display_name)}</span>${reason}</span>${injChip}${flip}${mark}`;
     return staff ? `<button class="row" data-act="attPerson" data-sid="${esc(s.id)}" data-uid="${esc(p.id)}">${inner}<span class="chev">${ICON.chev}</span></button>` : `<div class="row">${inner}</div>`;
   };
-  const block = (title, list) => `<div class="subhead">${title} · ${list.length}</div>${list.map(line).join("") || `<div class="row muted small">–</div>`}`;
+  const LBL = { yes: "Dabei", no: "Abgesagt", open: "Offen" };
+  const tabs = `<div class="seg" style="margin:4px 0 10px">${Object.entries(LBL).map(([g, l]) => `<button data-act="sessOpen" data-id="${esc(s.id)}" data-g="${g}" aria-pressed="${focus === g}">${l} · ${groups[g].length}</button>`).join("")}</div>`;
   sheet(`<h3>${esc(s.title || "Training")}</h3>
     <p class="small muted">${fmtLong(s.session_date)}${s.start_time ? " · " + hhmm(s.start_time) + " Uhr" : ""}${s.location ? " · " + esc(s.location) : ""}${s.cancelled ? ' · <span class="chip off">abgesagt</span>' : ""}</p>
-    <div class="card flush">${block("Dabei", groups.yes)}${block("Abgesagt", groups.no)}${block("Keine Antwort", groups.open)}</div>
+    ${tabs}<div class="card flush">${groups[focus].map(line).join("") || `<div class="row muted small">Niemand</div>`}</div>
+    ${focus === "no" && staff && groups.no.length ? `<p class="small muted" style="margin:6px 4px 0">Gründe sehen nur Trainer und Admins.</p>` : ""}
     ${staff ? `<div class="btns"><button class="btn ghost" data-act="sessEdit" data-id="${esc(s.id)}">Termin bearbeiten</button>${s.cancelled ? `<button class="btn ghost" data-act="sessCancel" data-id="${esc(s.id)}" data-v="0">Findet doch statt</button>` : pauseOn(s.session_date) ? "" : `<button class="btn ghost" data-act="sessCancel" data-id="${esc(s.id)}" data-v="1">Training fällt aus</button>`}</div>` : ""}
     <div class="btns"><button class="btn ghost block" data-act="closeSheet">Schließen</button></div>`);
 }
@@ -2158,7 +2166,7 @@ function importSheet() {
           <details class="mapmore"><summary class="small">Vorschau: so wird das Blatt gelesen</summary><div class="preview">${renderDays(p.days, mondayOf(todayIso()), false)}</div></details>`;
       }).join("")}
       <p class="small"><button type="button" class="linkbtn small" data-act="planFormat">Wie muss der Plan aufgebaut sein?</button></p>
-      ${r.extras.length ? `<p class="small muted" style="margin-top:10px">Weitere Blätter werden unter dem Plan angezeigt: ${r.extras.map(x => esc(x.name)).join(", ")}</p>` : ""}
+      ${r.extras.filter(x => !/abk/i.test(x.name)).length ? `<p class="small muted" style="margin-top:10px">Nicht übernommen (keine Wochentage): ${r.extras.filter(x => !/abk/i.test(x.name)).map(x => esc(x.name)).join(", ")}</p>` : ""}
       ${newAbk.length ? `<label class="opt"><input type="checkbox" name="abk" checked><span><b>${newAbk.length} Abkürzungen in die Übungssammlung übernehmen</b><span class="small muted">${esc(newAbk.map(a => a.abbreviation).join(", "))}</span></span></label>` : ""}
       ${existing ? `<p class="small" style="margin-top:8px">Für diese Woche gibt es schon den Plan „${esc(existing.title)}“. Der neue Plan ersetzt ihn.</p>` : ""}
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Plan speichern</button></div></form>`);
@@ -2223,7 +2231,7 @@ const actions = {
     await quiet(busy(el.parentElement, async () => { await S.be.respond(el.dataset.id, S.me.id, "yes"); await reloadSessions(); toast("Zugesagt"); }));
   },
   respNo(el) { absageSheet(el.dataset.id, S.me.id); },
-  sessOpen(el) { sessionSheet(el.dataset.id); },
+  sessOpen(el) { sessionSheet(el.dataset.id, el.dataset.g); },
   attPerson(el) { attPersonSheet(el.dataset.sid, el.dataset.uid); },
   async setMark(el) {
     await quiet(busy(el.parentElement, async () => { await S.be.setMark(el.dataset.sid, el.dataset.uid, el.dataset.v || null); await loadSessions(); render(); attPersonSheet(el.dataset.sid, el.dataset.uid); }));
@@ -2607,7 +2615,7 @@ const forms = {
       sheets.push({ name: p.name, group_id: gid, user_ids: uids, sort_order: i + 1, data: { days: p.days } });
     }
     const p0 = r.plans[0];
-    await S.be.savePlan({ valid_from: week, title: f.title.value.trim(), season: p0.season || "", goal: p0.goal || "", source_name: r.file, extra_sheets: r.extras.filter(x => !/abk/i.test(x.name)).map(x => ({ name: x.name, rows: x.rows })) }, sheets);
+    await S.be.savePlan({ valid_from: week, title: f.title.value.trim(), season: p0.season || "", goal: p0.goal || "", source_name: r.file, extra_sheets: [] }, sheets);
     for (const old of existing) await S.be.deletePlan(old.id);
     let added = 0;
     if (f.abk && f.abk.checked) {

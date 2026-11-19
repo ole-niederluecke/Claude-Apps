@@ -1,7 +1,7 @@
 // Offline-Cache für die App-Hülle. Daten (Supabase) werden nie zwischengespeichert.
 // Immer zuerst frisch aus dem Netz, offline aus dem Cache. So gibt es nach einem Update nie alte Dateien.
-const CACHE = "la-team-20261119-14";
-const CORE = ["./", "index.html", "app.js", "xlsx-plan.js", "config.js", "vendor/supabase-2.118.0.js", "manifest.webmanifest",
+const CACHE = "la-team-20261119-15";
+const CORE = ["./", "index.html", "app.js", "xlsx-plan.js", "plan-format.js", "config.js", "vendor/supabase-2.118.0.js", "manifest.webmanifest",
   "logo.png", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE.map(u => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting()));

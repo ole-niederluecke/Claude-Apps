@@ -200,11 +200,22 @@ dialog h3{font:700 1.4rem/1.1 var(--display);text-transform:uppercase;letter-spa
 .chip.solid{background:var(--accent);color:var(--on-accent)}
 .items{list-style:none;margin:8px 0 0;padding:0}
 .items li.gap{margin-top:10px}
-.item{display:flex;gap:12px;width:100%;text-align:left;padding:6px 0;border-top:1px solid var(--line);align-items:baseline}
+.item{display:flex;gap:10px;width:100%;text-align:left;padding:9px 0;border-top:1px solid var(--line);align-items:flex-start}
+.item .ix{flex:none;min-width:26px;font-size:.72rem;font-weight:800;color:var(--muted);padding-top:3px}
+.item .ibody{flex:1;min-width:0;display:block}
+.item .irow{display:flex;gap:10px;align-items:baseline}
+.item .rx{flex:none;margin-left:auto;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;padding-left:6px}
+.rxchips{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.rxchip{display:inline-flex;align-items:center;gap:3px;font-size:.72rem;padding:2px 7px;border-radius:999px;background:var(--surface-2);color:var(--fg)}
+.rxchip.rest{background:transparent;border:1px solid var(--line);color:var(--muted)}.rxchip svg{width:12px;height:12px}
+.rxtargets{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin-top:6px;font-size:.8rem;font-variant-numeric:tabular-nums}
+.rxt{display:contents}.rxt .who{color:var(--muted)}
+.rxsteps{display:block;margin-top:5px;font-size:.82rem}.rxsteps span{display:flex;gap:8px;padding:1px 0}.rxsteps b{flex:none;width:14px;color:var(--muted);font-weight:700}
+.rxnote{display:block;margin-top:4px;font-size:.8rem;color:var(--muted)}
 .items li:first-child .item{border-top:0}
 .item .it{flex:1;min-width:0}
 .item .it.known{text-decoration:underline dotted;text-underline-offset:3px}
-.item .det{flex:none;max-width:52%;text-align:right;font-size:.84rem;color:var(--muted)}
+
 .vid{display:inline-flex;vertical-align:-2px;color:var(--muted)}
 .extra summary{cursor:pointer}
 .tablewrap{overflow-x:auto;margin-top:10px}
@@ -233,9 +244,9 @@ input[type=date],input[type=time]{width:100%;min-height:46px;padding:10px 12px;b
 .resp button{min-height:46px;border-radius:12px;border:1.5px solid var(--line);font-weight:700;display:flex;align-items:center;justify-content:center;gap:6px}
 .resp button.on.yes{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .resp button.on.no{background:var(--danger-soft);color:var(--danger);border-color:var(--danger)}
-.counts{display:flex;align-items:center;gap:14px;width:100%;margin-top:12px;padding:12px 0;border-top:1px solid var(--line);font-size:.85rem;color:var(--muted)}
-.counts b{color:var(--fg);font-size:1rem}
-.counts svg{margin-left:auto}
+.counts{display:flex;gap:6px;width:100%;margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:.85rem;color:var(--muted)}
+.counts button{flex:1;padding:8px 4px;border-radius:8px;background:var(--surface-2);color:var(--muted);text-align:center}
+.counts b{color:var(--fg);font-size:1rem;margin-right:2px}
 .reasons .opt{margin-bottom:6px;padding:10px 12px}
 .hist{margin:0;padding-left:18px;font-size:.88rem}
 .hist li{padding:3px 0}
@@ -300,8 +311,8 @@ form.kind-phase .only-phase,form.kind-testwoche .only-testwoche,form.kind-wettka
 .myrate{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}.myrate b{font-size:1.6rem}
 .ratedot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:2px;background:var(--line)}
 .ratelegend{margin:10px 4px 0;max-width:320px}
-.rategrad{display:block;height:8px;border-radius:4px;background:linear-gradient(90deg,rgb(208,59,59) 0%,rgb(236,131,90) 50%,rgb(250,178,25) 65%,rgb(150,200,90) 75%,rgb(24,120,56) 100%)}
-.rateticks{display:flex;position:relative;height:1.3em;margin-top:2px}.rateticks span{position:absolute;transform:translateX(-50%)}.rateticks span:nth-child(1){left:0;transform:none}.rateticks span:nth-child(2){left:50%}.rateticks span:nth-child(3){left:75%}.rateticks span:nth-child(4){right:0;left:auto;transform:none}
+.rategrad{display:block;height:8px;border-radius:4px;background:linear-gradient(90deg,rgb(208,59,59) 0%,rgb(236,131,90) 25%,rgb(250,178,25) 45%,rgb(150,200,90) 75%,rgb(24,120,56) 100%)}
+.rateticks{display:flex;position:relative;height:1.3em;margin-top:2px}.rateticks span{position:absolute;transform:translateX(-50%)}.rateticks span:nth-child(1){left:0;transform:none}.rateticks span:nth-child(2){left:45%}.rateticks span:nth-child(3){left:75%}.rateticks span:nth-child(4){right:0;left:auto;transform:none}
 /* Planzuordnung & Hilfe */
 .sheetfor{display:flex;gap:8px;align-items:center;margin:-4px 4px 12px}
 .personlist{max-height:220px;overflow:auto;padding:6px 2px}
@@ -382,6 +393,7 @@ svg.chart .pt:hover .dot,svg.chart .pt:focus .dot{r:6}
 <dialog class="sheet" id="dlg"><div class="sheet-in" id="dlg-body"></div></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<script src="plan-format.js"></script>
 <script src="xlsx-plan.js"></script>
 <script src="app.js"></script>
 </body>
