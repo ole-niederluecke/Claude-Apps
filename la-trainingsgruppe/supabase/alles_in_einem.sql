@@ -1,7 +1,7 @@
--- Trainingsgruppe App: alle Teile (01–08) in einer Datei
+-- Trainingsgruppe App: alle Teile (01–09) in einer Datei
 -- Einmal komplett im Supabase SQL-Editor ausführen. Geht für die Ersteinrichtung und für jedes Update:
 -- alle Teile dürfen mehrfach laufen, vorhandene Daten bleiben erhalten.
--- Diese Datei wird aus 01_…sql bis 08_…sql zusammengesetzt; Änderungen bitte in den Einzeldateien machen.
+-- Diese Datei wird aus 01_…sql bis 09_…sql zusammengesetzt; Änderungen bitte in den Einzeldateien machen.
 
 
 -- ═════════════════════════ 01_grundlage.sql ═════════════════════════
@@ -409,6 +409,9 @@ language plpgsql security definer set search_path = public as $$
 begin
   if not public.is_staff() then raise exception 'Nur Trainer und Admins können markieren'; end if;
   if p_mark is not null and p_mark not in ('late', 'no_show') then raise exception 'Ungültige Markierung'; end if;
+  if p_mark is not null and public.in_pause((select session_date from public.sessions where id = p_session)) then
+    raise exception 'In der Saisonpause findet kein Training statt';
+  end if;
   insert into public.attendance (session_id, user_id, coach_mark, updated_at)
   values (p_session, p_user, p_mark, now())
   on conflict (session_id, user_id) do update set coach_mark = excluded.coach_mark, updated_at = now();
@@ -469,14 +472,13 @@ drop policy if exists "uebungen: lesen" on public.exercises;
 create policy "uebungen: lesen" on public.exercises for select to authenticated using (public.is_member());
 drop policy if exists "uebungen: anlegen" on public.exercises;
 create policy "uebungen: anlegen" on public.exercises for insert to authenticated
-  with check (public.is_member() and (created_by = auth.uid() or public.is_staff()));
+  with check (public.is_staff());   -- Übungen legen nur Trainer/Admins an
 drop policy if exists "uebungen: ändern" on public.exercises;
 create policy "uebungen: ändern" on public.exercises for update to authenticated
-  using (public.is_staff() or (public.is_member() and created_by = auth.uid()))
-  with check (public.is_staff() or (public.is_member() and created_by = auth.uid()));
+  using (public.is_staff()) with check (public.is_staff());
 drop policy if exists "uebungen: löschen" on public.exercises;
 create policy "uebungen: löschen" on public.exercises for delete to authenticated
-  using (public.is_staff() or (public.is_member() and created_by = auth.uid()));
+  using (public.is_staff());
 
 -- Termine
 drop policy if exists "termine: lesen" on public.sessions;
@@ -520,10 +522,10 @@ create policy "uebungsvideos: lesen" on storage.objects for select to authentica
   using (bucket_id = 'uebungen' and public.is_member());
 drop policy if exists "uebungsvideos: hochladen" on storage.objects;
 create policy "uebungsvideos: hochladen" on storage.objects for insert to authenticated
-  with check (bucket_id = 'uebungen' and public.is_member());
+  with check (bucket_id = 'uebungen' and public.is_staff());
 drop policy if exists "uebungsvideos: löschen" on storage.objects;
 create policy "uebungsvideos: löschen" on storage.objects for delete to authenticated
-  using (bucket_id = 'uebungen' and (owner_id = auth.uid()::text or public.is_staff()));
+  using (bucket_id = 'uebungen' and public.is_staff());
 
 
 -- ═════════════════════════ 03_leistung.sql ═════════════════════════
@@ -823,7 +825,7 @@ end $$;
 -- ───────────────────────── Absagegrund "Fortbildung", Grund für Trainer freiwillig ─────────────────────────
 alter table public.attendance_private drop constraint if exists attendance_private_reason_check;
 alter table public.attendance_private add constraint attendance_private_reason_check
-  check (reason in ('krank', 'verletzt', 'uni', 'arbeit', 'fortbildung', 'sonstiges'));
+  check (reason in ('krank', 'verletzt', 'uni', 'arbeit', 'urlaub', 'heimat', 'fortbildung', 'sonstiges'));
 
 create or replace function public.respond(p_session uuid, p_user uuid, p_status text, p_reason text default null, p_note text default '')
 returns void
@@ -841,10 +843,11 @@ begin
   coach := target.role in ('admin', 'trainer') and not coalesce(target.trains, false);
   if p_status = 'no' and not coach and coalesce(p_reason, '') = '' then raise exception 'Bitte wähle einen Absagegrund'; end if;
   if p_status = 'no' and p_reason = 'sonstiges' and not coach and coalesce(trim(p_note), '') = '' then raise exception 'Bitte beschreibe kurz den Grund'; end if;
-  if p_reason is not null and p_reason not in ('krank', 'verletzt', 'uni', 'arbeit', 'fortbildung', 'sonstiges') then raise exception 'Ungültiger Grund'; end if;
+  if p_reason is not null and p_reason not in ('krank', 'verletzt', 'uni', 'arbeit', 'urlaub', 'heimat', 'fortbildung', 'sonstiges') then raise exception 'Ungültiger Grund'; end if;
   select * into s from public.sessions where id = p_session;
   if s.id is null then raise exception 'Termin nicht gefunden'; end if;
   if s.cancelled then raise exception 'Dieser Termin ist abgesagt'; end if;
+  if public.in_pause(s.session_date) then raise exception 'In der Saisonpause findet kein Training statt'; end if;
   if not public.is_staff() and not public.week_is_open(s.session_date) then
     raise exception 'Die Anmeldung für diese Woche ist noch nicht geöffnet';
   end if;
@@ -988,6 +991,8 @@ create table if not exists public.attendance_weekly (
   reasons    jsonb not null default '{}',  -- Anzahl je Absagegrund, ohne Freitext
   primary key (user_id, week_start)
 );
+-- Absagen wegen Urlaub oder Heimatbesuch zählen nicht als Fehlen
+alter table public.attendance_weekly add column if not exists n_excused int not null default 0;
 
 create or replace function public.jsonb_sum(a jsonb, b jsonb) returns jsonb
 language sql immutable as $$
@@ -1011,38 +1016,42 @@ begin
     select p.id as user_id, date_trunc('week', s.session_date)::date as wk, a.status, a.coach_mark, ap.reason,
       exists (select 1 from public.injuries i where i.user_id = p.id and i.exclude_attendance
               and i.start_date <= s.session_date and (i.end_date is null or i.end_date >= s.session_date)) as inj,
-      exists (select 1 from public.attendance_log l where l.session_id = s.id and l.user_id = p.id and l.status = 'yes') as had_yes
+      exists (select 1 from public.attendance_log l where l.session_id = s.id and l.user_id = p.id and l.status = 'yes') as had_yes,
+      (a.status = 'no' and ap.reason in ('urlaub', 'heimat')) is true as exc
     from public.sessions s
     join public.profiles p on p.approved and coalesce(p.trains, p.role = 'athlete') and s.session_date >= p.created_at::date
     left join public.attendance a on a.session_id = s.id and a.user_id = p.id
     left join public.attendance_private ap on ap.session_id = s.id and ap.user_id = p.id
     where s.session_date < cutoff and not s.cancelled
+      and not exists (select 1 from public.calendar_entries c where c.kind = 'pause' and s.session_date between c.start_date and coalesce(c.end_date, c.start_date))
   ),
+  pairs2 as (select *, inj or exc as skip from pairs),
   agg as (
     select user_id, wk,
-      count(*) filter (where not inj) as counted,
-      count(*) filter (where not inj and ((status = 'yes' and coalesce(coach_mark, '') <> 'no_show') or coach_mark = 'late')) as attended,
-      count(*) filter (where not inj and status = 'yes') as n_yes,
-      count(*) filter (where not inj and status = 'no') as n_no,
-      count(*) filter (where not inj and status is distinct from 'yes' and status is distinct from 'no') as n_open,
-      count(*) filter (where not inj and coach_mark = 'late') as n_late,
-      count(*) filter (where not inj and coach_mark = 'no_show') as n_no_show,
-      count(*) filter (where not inj and status = 'no' and had_yes) as n_flipped,
-      count(*) filter (where inj) as n_skipped
-    from pairs group by user_id, wk
+      count(*) filter (where not skip) as counted,
+      count(*) filter (where not skip and ((status = 'yes' and coalesce(coach_mark, '') <> 'no_show') or coach_mark = 'late')) as attended,
+      count(*) filter (where not skip and status = 'yes') as n_yes,
+      count(*) filter (where not skip and status = 'no') as n_no,
+      count(*) filter (where not skip and status is distinct from 'yes' and status is distinct from 'no') as n_open,
+      count(*) filter (where not skip and coach_mark = 'late') as n_late,
+      count(*) filter (where not skip and coach_mark = 'no_show') as n_no_show,
+      count(*) filter (where not skip and status = 'no' and had_yes) as n_flipped,
+      count(*) filter (where inj) as n_skipped,
+      count(*) filter (where exc and not inj) as n_excused
+    from pairs2 group by user_id, wk
   ),
   rsn as (
     select user_id, wk, jsonb_object_agg(r, c) as reasons
     from (select user_id, wk, coalesce(reason, 'ohne Angabe') as r, count(*) as c from pairs where not inj and status = 'no' group by 1, 2, 3) x
     group by user_id, wk
   )
-  insert into public.attendance_weekly as w (user_id, week_start, counted, attended, n_yes, n_no, n_open, n_late, n_no_show, n_flipped, n_skipped, reasons)
-  select a.user_id, a.wk, a.counted, a.attended, a.n_yes, a.n_no, a.n_open, a.n_late, a.n_no_show, a.n_flipped, a.n_skipped, coalesce(r.reasons, '{}')
+  insert into public.attendance_weekly as w (user_id, week_start, counted, attended, n_yes, n_no, n_open, n_late, n_no_show, n_flipped, n_skipped, n_excused, reasons)
+  select a.user_id, a.wk, a.counted, a.attended, a.n_yes, a.n_no, a.n_open, a.n_late, a.n_no_show, a.n_flipped, a.n_skipped, a.n_excused, coalesce(r.reasons, '{}')
   from agg a left join rsn r using (user_id, wk)
   on conflict (user_id, week_start) do update set
     counted = w.counted + excluded.counted, attended = w.attended + excluded.attended, n_yes = w.n_yes + excluded.n_yes,
     n_no = w.n_no + excluded.n_no, n_open = w.n_open + excluded.n_open, n_late = w.n_late + excluded.n_late,
-    n_no_show = w.n_no_show + excluded.n_no_show, n_flipped = w.n_flipped + excluded.n_flipped, n_skipped = w.n_skipped + excluded.n_skipped,
+    n_no_show = w.n_no_show + excluded.n_no_show, n_flipped = w.n_flipped + excluded.n_flipped, n_skipped = w.n_skipped + excluded.n_skipped, n_excused = w.n_excused + excluded.n_excused,
     reasons = public.jsonb_sum(w.reasons, excluded.reasons);
 
   delete from public.sessions where session_date < cutoff;   -- Zu-/Absagen, Gründe und Verlauf fallen mit weg
@@ -1187,3 +1196,33 @@ language sql stable security definer set search_path = public as $$
 $$;
 revoke execute on function public.feedback_board() from public, anon;
 grant execute on function public.feedback_board() to authenticated;
+
+
+-- ═════════════════════════ 09_saisonpause.sql ═════════════════════════
+-- Trainingsgruppe App, Teil 9: Saisonpause, Absagegründe Urlaub/Heimatbesuch, Datenbank wach halten
+-- Voraussetzung: Teil 1–8 wurden ausgeführt (oder einfach alles_in_einem.sql). Kann erneut ausgeführt werden.
+
+-- ───────────────────────── Saisonpause ─────────────────────────
+-- Ein Kalendereintrag der Art „pause“ (von–bis): in dieser Zeit findet kein Training statt.
+-- Termine darin gelten als ausgefallen, man kann nicht zu-/absagen und nichts zählt in die Statistik.
+alter table public.calendar_entries drop constraint if exists calendar_entries_kind_check;
+alter table public.calendar_entries add constraint calendar_entries_kind_check
+  check (kind in ('phase', 'wettkampf', 'testwoche', 'pause', 'sonstiges'));
+
+create or replace function public.in_pause(p_date date) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.calendar_entries
+                 where kind = 'pause' and p_date between start_date and coalesce(end_date, start_date))
+$$;
+revoke execute on function public.in_pause(date) from public, anon;
+grant execute on function public.in_pause(date) to authenticated;
+
+-- „zu spät“/„nicht erschienen“ ist in der Pause gesperrt (siehe set_mark in Teil 2), Zu-/Absagen ebenso (respond in Teil 4)
+
+-- ───────────────────────── Datenbank wach halten ─────────────────────────
+-- Supabase pausiert kostenlose Projekte nach 7 Tagen ohne Zugriff. Eine GitHub-Aktion ruft dafür
+-- zweimal pro Woche diese Funktion auf. Sie liest keine Daten und gibt nur „ok“ zurück.
+create or replace function public.ping() returns text
+language sql stable as $$ select 'ok'::text $$;
+revoke execute on function public.ping() from public;
+grant execute on function public.ping() to anon, authenticated;

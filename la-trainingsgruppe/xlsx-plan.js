@@ -131,6 +131,8 @@
     const t = s.trim();
     // Übungen, die mit einer Zahl beginnen: "5er Hop", "10er SPL", "30m fliegend", "60m Hürden"
     if (/^\d+er\b/i.test(t) || /^\d+\s?m\s+(fliegend|aus|sprint|steigerung|tief|hürde|huerde|start)/i.test(t)) return false;
+    // Nummerierte Übung: "1b. Drop Jump", "2a) Kniebeuge"
+    if (/^\d+[a-z][.)]\s*[a-zäöüß]{3,}/i.test(t)) return false;
     if (/^(\d|\(|min\b|max\b|p\s*[:.]|sp\s*[:.]|sp\s+\d|i\.\s*\d|ggf\b|je\b|pro\b|ca\.?\s*\d)/i.test(t)) return true;
     // Zielzeiten/Abstände: "Jungs 7,4-7,6s", "Name/ Name: 26-29s", "Abstände Eng (1,7-1,8m)"
     const numeric = /\d+[,.]\d+/.test(t) || /\d\s*s\b/.test(t);
@@ -160,27 +162,39 @@
     }
     const subtitle = head.slice(1, zi >= 0 ? zi : head.length).join(" · ");
     const days = [];
+    // Gibt es eine Zeile für Ort/Uhrzeit/Status direkt unter den Wochentagen?
+    const TIME_OR_STATUS = v => v && (TIME_RE.test(v) || STATUS_RE.test(v));
+    const hasInfoRow = Object.values(cols).some(c => TIME_OR_STATUS((rows[hr + 1] || [])[c]));
     for (let d = 0; d < 7; d++) {
       const c = cols[d];
       const day = { day: d, info: "", title: "", titleDetails: [], items: [] };
       if (c == null) { days.push(day); continue; }
       const cells = [];
       for (let r = hr + 1; r < rows.length; r++) cells.push({ r, v: (rows[r][c] || "").trim() });
-      // Zeile direkt unter dem Wochentag: Ort/Uhrzeit oder Status; danach das Tagesthema
+      // Zeile direkt unter dem Wochentag: Ort/Uhrzeit oder Status; die Zeile darunter: Tagesthema.
+      // Steht in der Themenzeile nichts, hat der Tag kein Thema (bzw. der Status „Pause“/„Regeneration“ ist das Thema).
       let i = 0;
       const first = cells[0] && cells[0].v, second = cells[1] && cells[1].v;
-      if (first && (TIME_RE.test(first) || STATUS_RE.test(first) || /^[A-ZÄÖÜ]{2,5}\b/.test(first) && first.length <= 25 && second)) { day.info = first; i = 1; }
-      else if (!first) i = 1;
-      while (i < cells.length && !cells[i].v) i++;
-      if (i < cells.length && !isDetail(cells[i].v)) { day.title = cells[i].v; i++; }
-      else if (!day.title && first && !day.info) { /* kein Thema */ }
+      const infoLike = v => v && (TIME_RE.test(v) || STATUS_RE.test(v) || /^[A-ZÄÖÜ]{2,5}\b/.test(v) && v.length <= 25);
+      if (first && infoLike(first) && (second || hasInfoRow)) {
+        day.info = first; i = 1;
+        if (!second && hasInfoRow) { if (STATUS_RE.test(first)) { day.title = first; day.info = ""; } i = 2; }
+      } else if (!first) {
+        i = 1;
+        if (hasInfoRow && !second) i = 2;
+      }
+      if (!day.title && i <= 1) {
+        while (i < cells.length && !cells[i].v) i++;
+        if (i < cells.length && !isDetail(cells[i].v)) { day.title = cells[i].v; i++; }
+      }
       let cur = null, gap = false;
       for (; i < cells.length; i++) {
         const v = cells[i].v;
         if (!v) { gap = true; continue; }
+        if (v.length < 2 && !/\d/.test(v)) continue;   // verirrte Einzelbuchstaben
         if (cur && isDetail(v)) { cur.details.push(v); }
         else if (!cur && day.title && isDetail(v)) { (day.titleDetails = day.titleDetails || []).push(v); }
-        else { cur = { text: v, details: [] }; if (gap && day.items.length) cur.gap = true; day.items.push(cur); }
+        else { cur = { text: v.replace(/\s*:\s*$/, ""), details: [] }; if (gap && day.items.length) cur.gap = true; day.items.push(cur); }
         gap = false;
       }
       days.push(day);
@@ -193,6 +207,7 @@
     const out = { plans: [], extras: [] };
     for (const s of sheets) {
       if (!s.rows.length) continue;
+      if (/^(anleitung|hinweise?|readme|info)$/i.test(s.name.trim())) continue;   // Erklärblatt der Vorlage
       const st = structureSheet(s);
       (st.kind === "plan" ? out.plans : out.extras).push(st);
     }

@@ -7,7 +7,7 @@ Im Supabase-Projekt links **SQL Editor → New query** öffnen, den kompletten I
 
 Das gilt auch für **jedes Update**: Kommt eine neue Version, einfach wieder `alles_in_einem.sql` komplett ausführen, und zwar **vor** dem Mergen. Die Datei darf beliebig oft laufen. Vorhandene Daten, eigene Tests und Normen bleiben erhalten.
 
-Die Einzeldateien `01_…sql` bis `08_…sql` enthalten dasselbe, nur aufgeteilt nach Themen. Man braucht sie nicht einzeln auszuführen.
+Die Einzeldateien `01_…sql` bis `09_…sql` enthalten dasselbe, nur aufgeteilt nach Themen. Man braucht sie nicht einzeln auszuführen.
 
 ## 2. Anmeldung einstellen
 Unter **Authentication**:
@@ -19,3 +19,11 @@ In `config.js` stehen die Project URL und der publishable/anon Key. Beide sind �
 
 ## 4. Erstes Konto
 Das erste registrierte Konto wird automatisch Admin. Danach registrieren sich Trainer und Athleten selbst und werden in der App unter **Mehr → Team** freigeschaltet.
+
+## Demo für andere
+Wer die App erst ausprobieren soll, bekommt diesen Link. Er öffnet sofort die Demo mit ausgedachten Daten, ohne Konto:
+
+- als Athlet: `https://ole-niederluecke.github.io/Claude-Apps/la-trainingsgruppe/?demo`
+- als Trainer: `…/la-trainingsgruppe/?demo=trainer`
+
+Alles, was man in der Demo ändert, bleibt nur auf dem eigenen Gerät.

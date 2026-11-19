@@ -50,7 +50,7 @@ end $$;
 -- ───────────────────────── Absagegrund "Fortbildung", Grund für Trainer freiwillig ─────────────────────────
 alter table public.attendance_private drop constraint if exists attendance_private_reason_check;
 alter table public.attendance_private add constraint attendance_private_reason_check
-  check (reason in ('krank', 'verletzt', 'uni', 'arbeit', 'fortbildung', 'sonstiges'));
+  check (reason in ('krank', 'verletzt', 'uni', 'arbeit', 'urlaub', 'heimat', 'fortbildung', 'sonstiges'));
 
 create or replace function public.respond(p_session uuid, p_user uuid, p_status text, p_reason text default null, p_note text default '')
 returns void
@@ -68,10 +68,11 @@ begin
   coach := target.role in ('admin', 'trainer') and not coalesce(target.trains, false);
   if p_status = 'no' and not coach and coalesce(p_reason, '') = '' then raise exception 'Bitte wähle einen Absagegrund'; end if;
   if p_status = 'no' and p_reason = 'sonstiges' and not coach and coalesce(trim(p_note), '') = '' then raise exception 'Bitte beschreibe kurz den Grund'; end if;
-  if p_reason is not null and p_reason not in ('krank', 'verletzt', 'uni', 'arbeit', 'fortbildung', 'sonstiges') then raise exception 'Ungültiger Grund'; end if;
+  if p_reason is not null and p_reason not in ('krank', 'verletzt', 'uni', 'arbeit', 'urlaub', 'heimat', 'fortbildung', 'sonstiges') then raise exception 'Ungültiger Grund'; end if;
   select * into s from public.sessions where id = p_session;
   if s.id is null then raise exception 'Termin nicht gefunden'; end if;
   if s.cancelled then raise exception 'Dieser Termin ist abgesagt'; end if;
+  if public.in_pause(s.session_date) then raise exception 'In der Saisonpause findet kein Training statt'; end if;
   if not public.is_staff() and not public.week_is_open(s.session_date) then
     raise exception 'Die Anmeldung für diese Woche ist noch nicht geöffnet';
   end if;

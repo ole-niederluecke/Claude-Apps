@@ -32,6 +32,8 @@ create table if not exists public.attendance_weekly (
   reasons    jsonb not null default '{}',  -- Anzahl je Absagegrund, ohne Freitext
   primary key (user_id, week_start)
 );
+-- Absagen wegen Urlaub oder Heimatbesuch zählen nicht als Fehlen
+alter table public.attendance_weekly add column if not exists n_excused int not null default 0;
 
 create or replace function public.jsonb_sum(a jsonb, b jsonb) returns jsonb
 language sql immutable as $$
@@ -55,38 +57,42 @@ begin
     select p.id as user_id, date_trunc('week', s.session_date)::date as wk, a.status, a.coach_mark, ap.reason,
       exists (select 1 from public.injuries i where i.user_id = p.id and i.exclude_attendance
               and i.start_date <= s.session_date and (i.end_date is null or i.end_date >= s.session_date)) as inj,
-      exists (select 1 from public.attendance_log l where l.session_id = s.id and l.user_id = p.id and l.status = 'yes') as had_yes
+      exists (select 1 from public.attendance_log l where l.session_id = s.id and l.user_id = p.id and l.status = 'yes') as had_yes,
+      (a.status = 'no' and ap.reason in ('urlaub', 'heimat')) is true as exc
     from public.sessions s
     join public.profiles p on p.approved and coalesce(p.trains, p.role = 'athlete') and s.session_date >= p.created_at::date
     left join public.attendance a on a.session_id = s.id and a.user_id = p.id
     left join public.attendance_private ap on ap.session_id = s.id and ap.user_id = p.id
     where s.session_date < cutoff and not s.cancelled
+      and not exists (select 1 from public.calendar_entries c where c.kind = 'pause' and s.session_date between c.start_date and coalesce(c.end_date, c.start_date))
   ),
+  pairs2 as (select *, inj or exc as skip from pairs),
   agg as (
     select user_id, wk,
-      count(*) filter (where not inj) as counted,
-      count(*) filter (where not inj and ((status = 'yes' and coalesce(coach_mark, '') <> 'no_show') or coach_mark = 'late')) as attended,
-      count(*) filter (where not inj and status = 'yes') as n_yes,
-      count(*) filter (where not inj and status = 'no') as n_no,
-      count(*) filter (where not inj and status is distinct from 'yes' and status is distinct from 'no') as n_open,
-      count(*) filter (where not inj and coach_mark = 'late') as n_late,
-      count(*) filter (where not inj and coach_mark = 'no_show') as n_no_show,
-      count(*) filter (where not inj and status = 'no' and had_yes) as n_flipped,
-      count(*) filter (where inj) as n_skipped
-    from pairs group by user_id, wk
+      count(*) filter (where not skip) as counted,
+      count(*) filter (where not skip and ((status = 'yes' and coalesce(coach_mark, '') <> 'no_show') or coach_mark = 'late')) as attended,
+      count(*) filter (where not skip and status = 'yes') as n_yes,
+      count(*) filter (where not skip and status = 'no') as n_no,
+      count(*) filter (where not skip and status is distinct from 'yes' and status is distinct from 'no') as n_open,
+      count(*) filter (where not skip and coach_mark = 'late') as n_late,
+      count(*) filter (where not skip and coach_mark = 'no_show') as n_no_show,
+      count(*) filter (where not skip and status = 'no' and had_yes) as n_flipped,
+      count(*) filter (where inj) as n_skipped,
+      count(*) filter (where exc and not inj) as n_excused
+    from pairs2 group by user_id, wk
   ),
   rsn as (
     select user_id, wk, jsonb_object_agg(r, c) as reasons
     from (select user_id, wk, coalesce(reason, 'ohne Angabe') as r, count(*) as c from pairs where not inj and status = 'no' group by 1, 2, 3) x
     group by user_id, wk
   )
-  insert into public.attendance_weekly as w (user_id, week_start, counted, attended, n_yes, n_no, n_open, n_late, n_no_show, n_flipped, n_skipped, reasons)
-  select a.user_id, a.wk, a.counted, a.attended, a.n_yes, a.n_no, a.n_open, a.n_late, a.n_no_show, a.n_flipped, a.n_skipped, coalesce(r.reasons, '{}')
+  insert into public.attendance_weekly as w (user_id, week_start, counted, attended, n_yes, n_no, n_open, n_late, n_no_show, n_flipped, n_skipped, n_excused, reasons)
+  select a.user_id, a.wk, a.counted, a.attended, a.n_yes, a.n_no, a.n_open, a.n_late, a.n_no_show, a.n_flipped, a.n_skipped, a.n_excused, coalesce(r.reasons, '{}')
   from agg a left join rsn r using (user_id, wk)
   on conflict (user_id, week_start) do update set
     counted = w.counted + excluded.counted, attended = w.attended + excluded.attended, n_yes = w.n_yes + excluded.n_yes,
     n_no = w.n_no + excluded.n_no, n_open = w.n_open + excluded.n_open, n_late = w.n_late + excluded.n_late,
-    n_no_show = w.n_no_show + excluded.n_no_show, n_flipped = w.n_flipped + excluded.n_flipped, n_skipped = w.n_skipped + excluded.n_skipped,
+    n_no_show = w.n_no_show + excluded.n_no_show, n_flipped = w.n_flipped + excluded.n_flipped, n_skipped = w.n_skipped + excluded.n_skipped, n_excused = w.n_excused + excluded.n_excused,
     reasons = public.jsonb_sum(w.reasons, excluded.reasons);
 
   delete from public.sessions where session_date < cutoff;   -- Zu-/Absagen, Gründe und Verlauf fallen mit weg
