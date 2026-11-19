@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "19.11.2026 · 14";
+const VERSION = "19.11.2026 · 15";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -97,8 +97,10 @@ const CONFLICT = { competition_entries: "entry_id,user_id", attendance_weekly: "
 const INSERT_ONLY = new Set(["session_weeks", "week_openings", "attendance_log", "attendance_weekly"]); // nur ergänzen, nie überschreiben
 const ORDER = { attendance_weekly: ["week_start"], feedback: ["created_at"], test_types: ["sort_order", "name"], calendar_entries: ["start_date"], test_results: ["test_date"], competition_results: ["comp_date"], injuries: ["start_date"] };
 
+// Ein Supabase-Client pro Verbindung (z. B. nach „Demo beenden“ wiederverwenden statt einen zweiten anzulegen)
+const SB_CLIENTS = {};
 function makeSupabaseBackend(url, key) {
-  const sb = window.supabase.createClient(url, key, {
+  const sb = SB_CLIENTS[url + "|" + key] = SB_CLIENTS[url + "|" + key] || window.supabase.createClient(url, key, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "implicit", storageKey: "la-auth" }
   });
   const ok = r => { if (r.error) throw r.error; return r.data; };
@@ -936,9 +938,6 @@ function itemGroups(d) {
     if (b.length % 2 === 0) for (let i = 0; i < b.length; i += 2) out.push({ items: b.slice(i, i + 2), pair: true });
     else out.push({ items: b, pair: true });
   });
-  // Blöcke am Krafttag mit Buchstaben: A1/A2 = Supersatz, C = einzelne Übung
-  let n = 0;
-  out.forEach(g => { if (g.warmup) return; const L = String.fromCharCode(65 + n++); g.labels = g.items.length > 1 ? g.items.map((_, i) => L + (i + 1)) : [L]; });
   return out;
 }
 // Zeilen wie „Djamil & Ole“ oder „Alternativ Biene“ sind Hinweise, für wen die folgenden Übungen gelten
@@ -951,7 +950,7 @@ function itemKind(text) {
   return "";
 }
 // Eine Übung: Name links, Umfang groß rechts, darunter Zusätze, Pausen, Zielzeiten, Teilübungen
-function itemHtml(it, live, label) {
+function itemHtml(it, live) {
   const kind = itemKind(it.text);
   if (kind === "or") return `<div class="itemlabel">oder</div>`;
   if (kind === "who" && !it.details.length) return `<div class="itemlabel who">${esc(it.text)}</div>`;
@@ -963,7 +962,7 @@ function itemHtml(it, live, label) {
     + (rx.steps.length ? `<span class="rxsteps">${rx.steps.map((st, i) => `<span><b>${i + 1}</b>${esc(st)}</span>`).join("")}</span>` : "")
     + (rx.notes.length ? `<span class="rxnote">${rx.notes.map(esc).join(" · ")}</span>` : "");
   return `<button class="item${/^alternativ\b/i.test(it.text) ? " altitem" : ""}" ${live ? `data-act="itemInfo" data-text="${esc(it.text)}"` : 'type="button" tabindex="-1"'}>
-    ${label ? `<span class="ix">${label}</span>` : ""}<span class="ibody"><span class="irow"><span class="it ${ex ? "known" : ""}">${esc(rx.title || it.text)}${ex && (ex.video_path || ex.video_url) ? ` <span class="vid">${ICON.video}</span>` : ""}</span>
+    <span class="ibody"><span class="irow"><span class="it ${ex ? "known" : ""}">${esc(rx.title || it.text)}${ex && (ex.video_path || ex.video_url) ? ` <span class="vid">${ICON.video}</span>` : ""}</span>
     ${rx.main ? `<span class="rx">${esc(rx.main)}</span>` : ""}</span>${sub}</span></button>`;
 }
 function renderDays(days, mon, live) {
@@ -976,7 +975,7 @@ function renderDays(days, mon, live) {
         ${dayChips(d.info, sess)}</div>
       ${d.title ? `<div class="daytitle">${esc(d.title)}</div>` : ""}
       ${(d.titleDetails || []).length ? `<div class="small muted">${d.titleDetails.map(esc).join(" · ")}</div>` : ""}
-      ${d.items.length ? `<ul class="items">${itemGroups(d).map(g => `<li class="grp ${g.pair ? "pair" : ""} ${g.warmup ? "warmup" : ""}">${g.warmup ? '<span class="wutag">Aufwärmen</span>' : g.pair ? `<span class="wutag">${g.items.length === 2 ? "Supersatz" : g.items.length + "er-Block"}</span>` : ""}${g.items.map((it, i) => itemHtml(it, live, g.labels && g.labels[i])).join("")}</li>`).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
+      ${d.items.length ? `<ul class="items">${itemGroups(d).map(g => `<li class="grp ${g.pair ? "pair" : ""} ${g.warmup ? "warmup" : ""}">${g.warmup ? '<span class="wutag">Aufwärmen</span>' : g.pair ? `<span class="wutag">${g.items.length === 2 ? "Supersatz" : g.items.length + "er-Block"}</span>` : ""}${g.items.map(it => itemHtml(it, live)).join("")}</li>`).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
     </section>`;
   }).join("");
 }
@@ -1453,8 +1452,8 @@ function viewLeistung() {
   if (S.perfView === "enter") return html + viewEnter();
   return html + viewOverview();
 }
-// Fließende Farbskala: Rot → Orange (25 %) → Gelb (45 %) → ab 75 % hellgrün → 100 % dunkelgrün
-const RATE_STOPS = [[0, [208, 59, 59]], [25, [236, 131, 90]], [45, [250, 178, 25]], [75, [150, 200, 90]], [100, [24, 120, 56]]];
+// Fließende Farbskala, streng: unter 50 % rot, 65 % orange, 80 % gelb, erst ab 90 % hellgrün, 100 % dunkelgrün
+const RATE_STOPS = [[0, [208, 59, 59]], [50, [208, 59, 59]], [65, [236, 131, 90]], [80, [250, 178, 25]], [90, [150, 200, 90]], [100, [24, 120, 56]]];
 function rateColor(r) {
   if (r == null) return "var(--line)";
   r = Math.max(0, Math.min(100, r));
@@ -1464,7 +1463,7 @@ function rateColor(r) {
 }
 const rateDot = r => `<i class="ratedot" style="background:${rateColor(r)}"></i>`;
 const rateBar = (r, big) => `<span class="bar${big ? " big" : ""}" aria-hidden="true"><i style="width:${r ?? 0}%;background:${rateColor(r)}"></i></span>`;
-const RATE_LEGEND = `<div class="ratelegend small muted"><span class="rategrad" aria-hidden="true"></span><span class="rateticks"><span>0 %</span><span>45</span><span>75</span><span>100 %</span></span></div>`;
+const RATE_LEGEND = `<div class="ratelegend small muted"><span class="rategrad" aria-hidden="true"></span><span class="rateticks"><span>0 %</span><span>50</span><span>65</span><span>80</span><span>100 %</span></span></div>`;
 // Eigene Trainingsbeteiligung für Athleten
 function myAttendanceCard() {
   if (!S.stats.loaded || S.stats.from !== addDays(todayIso(), -STAT_RANGES[S.statRange][1])) {
