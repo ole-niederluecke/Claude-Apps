@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "19.11.2026 · 16";
+const VERSION = "19.11.2026 · 17";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
