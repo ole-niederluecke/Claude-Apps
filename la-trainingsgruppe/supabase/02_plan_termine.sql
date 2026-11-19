@@ -165,6 +165,9 @@ language plpgsql security definer set search_path = public as $$
 begin
   if not public.is_staff() then raise exception 'Nur Trainer und Admins können markieren'; end if;
   if p_mark is not null and p_mark not in ('late', 'no_show') then raise exception 'Ungültige Markierung'; end if;
+  if p_mark is not null and public.in_pause((select session_date from public.sessions where id = p_session)) then
+    raise exception 'In der Saisonpause findet kein Training statt';
+  end if;
   insert into public.attendance (session_id, user_id, coach_mark, updated_at)
   values (p_session, p_user, p_mark, now())
   on conflict (session_id, user_id) do update set coach_mark = excluded.coach_mark, updated_at = now();
@@ -225,14 +228,13 @@ drop policy if exists "uebungen: lesen" on public.exercises;
 create policy "uebungen: lesen" on public.exercises for select to authenticated using (public.is_member());
 drop policy if exists "uebungen: anlegen" on public.exercises;
 create policy "uebungen: anlegen" on public.exercises for insert to authenticated
-  with check (public.is_member() and (created_by = auth.uid() or public.is_staff()));
+  with check (public.is_staff());   -- Übungen legen nur Trainer/Admins an
 drop policy if exists "uebungen: ändern" on public.exercises;
 create policy "uebungen: ändern" on public.exercises for update to authenticated
-  using (public.is_staff() or (public.is_member() and created_by = auth.uid()))
-  with check (public.is_staff() or (public.is_member() and created_by = auth.uid()));
+  using (public.is_staff()) with check (public.is_staff());
 drop policy if exists "uebungen: löschen" on public.exercises;
 create policy "uebungen: löschen" on public.exercises for delete to authenticated
-  using (public.is_staff() or (public.is_member() and created_by = auth.uid()));
+  using (public.is_staff());
 
 -- Termine
 drop policy if exists "termine: lesen" on public.sessions;
@@ -276,7 +278,7 @@ create policy "uebungsvideos: lesen" on storage.objects for select to authentica
   using (bucket_id = 'uebungen' and public.is_member());
 drop policy if exists "uebungsvideos: hochladen" on storage.objects;
 create policy "uebungsvideos: hochladen" on storage.objects for insert to authenticated
-  with check (bucket_id = 'uebungen' and public.is_member());
+  with check (bucket_id = 'uebungen' and public.is_staff());
 drop policy if exists "uebungsvideos: löschen" on storage.objects;
 create policy "uebungsvideos: löschen" on storage.objects for delete to authenticated
-  using (bucket_id = 'uebungen' and (owner_id = auth.uid()::text or public.is_staff()));
+  using (bucket_id = 'uebungen' and public.is_staff());

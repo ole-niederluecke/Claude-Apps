@@ -1,0 +1,33 @@
+# Hält das kostenlose Supabase-Projekt der Trainingsgruppen-App wach.
+# Supabase pausiert kostenlose Projekte nach 7 Tagen ohne Zugriff. Diese Aktion ruft zweimal pro Woche
+# die Funktion public.ping() auf (liest keine Daten, gibt nur „ok“ zurück).
+# Schlägt der Aufruf fehl (z. B. weil das Projekt schon pausiert ist), schickt GitHub eine E-Mail.
+name: Supabase wach halten
+
+on:
+  schedule:
+    - cron: "17 6 * * 1,4"   # Montag und Donnerstag, 6:17 UTC
+  workflow_dispatch: {}       # zum Testen: Actions → „Supabase wach halten“ → Run workflow
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Datenbank kurz aufrufen
+        run: |
+          # URL und publishable Key stehen öffentlich in config.js (kein Geheimnis)
+          URL=$(grep -oE 'supabaseUrl:\s*"[^"]+"' la-trainingsgruppe/config.js | cut -d'"' -f2)
+          KEY=$(grep -oE 'supabaseKey:\s*"[^"]+"' la-trainingsgruppe/config.js | cut -d'"' -f2)
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then echo "config.js ohne Supabase-Zugang, nichts zu tun"; exit 0; fi
+          for i in 1 2 3; do
+            OUT=$(curl -sS --fail --max-time 30 -X POST "$URL/rest/v1/rpc/ping" \
+              -H "apikey: $KEY" -H "Content-Type: application/json" -d '{}') && break
+            echo "Versuch $i fehlgeschlagen, neuer Versuch in 20 s"; sleep 20
+          done
+          echo "Antwort: $OUT"
+          [ "$OUT" = '"ok"' ] || { echo "Supabase antwortet nicht wie erwartet – ist das Projekt pausiert? Im Dashboard auf Restore klicken."; exit 1; }

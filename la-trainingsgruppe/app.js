@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "19.11.2026 · 12";
+const VERSION = "19.11.2026 · 13";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -377,6 +377,7 @@ function makeDemoBackend() {
   const myRole = () => { const m = meRow(); return m && m.approved ? m.role : null; };
   const staff = () => ["admin", "trainer"].includes(myRole());
   const deny = msg => { throw new Error(msg || "Keine Berechtigung für diese Änderung."); };
+  const inPause = d => (db.calendar_entries || []).some(e => e.kind === "pause" && d >= e.start_date && d <= (e.end_date || e.start_date));
   const needMember = () => { if (!myRole()) deny(); };
   const needStaff = () => { if (!staff()) deny(); };
   const otherAdmins = id => db.profiles.some(p => p.role === "admin" && p.approved && p.id !== id);
@@ -443,7 +444,7 @@ function makeDemoBackend() {
     async planSheets(planId) {
       needMember();
       const mine = (meRow() || {}).plan_group_id;
-      return clone(db.plan_sheets.filter(s => s.plan_id === planId && (staff() || db.settings.plan_visibility === "all" || s.group_id === mine || (s.user_ids || []).includes(me()))).sort((a, b) => a.sort_order - b.sort_order));
+      return clone(db.plan_sheets.filter(s => s.plan_id === planId && (staff() || db.settings.plan_visibility === "all" || (s.group_id && s.group_id === mine) || (s.user_ids || []).includes(me()))).sort((a, b) => a.sort_order - b.sort_order));
     },
     async savePlan(plan, sheets) {
       needStaff();
@@ -454,7 +455,7 @@ function makeDemoBackend() {
     async deletePlan(id) { needStaff(); db.plans = db.plans.filter(p => p.id !== id); db.plan_sheets = db.plan_sheets.filter(s => s.plan_id !== id); save(); },
     async exercises() { needMember(); return clone(db.exercises.slice().sort((a, b) => a.name.localeCompare(b.name, "de"))); },
     async saveExercise(row) {
-      needMember();
+      needStaff();
       const dup = db.exercises.find(e => e.name.trim().toLowerCase() === row.name.trim().toLowerCase() && e.id !== row.id);
       if (dup) deny("Eine Übung mit diesem Namen gibt es schon.");
       if (row.id) {
@@ -467,7 +468,7 @@ function makeDemoBackend() {
     },
     async deleteExercise(id) {
       const e = db.exercises.find(x => x.id === id);
-      if (!e || (!staff() && e.created_by !== me())) deny();
+      if (!e || !staff()) deny();
       db.exercises = db.exercises.filter(x => x.id !== id); save();
     },
     async uploadVideo() { deny("Videos hochladen geht im Demo-Modus nicht. Ein Link funktioniert."); },
@@ -501,6 +502,7 @@ function makeDemoBackend() {
       if (status === "no" && !reason && !coach) deny("Bitte wähle einen Absagegrund");
       if (status === "no" && reason === "sonstiges" && !coach && !String(note || "").trim()) deny("Bitte beschreibe kurz den Grund");
       const s = db.sessions.find(x => x.id === sid); if (!s) deny("Termin nicht gefunden"); if (s.cancelled) deny("Dieser Termin ist abgesagt");
+      if (inPause(s.session_date)) deny("In der Saisonpause findet kein Training statt");
       const wk = mondayOf(s.session_date), auto = demoAutoOpen(db.settings, wk);
       if (!staff() && !(db.week_openings || []).some(w => w.week_start === wk) && !(auto && new Date() >= auto)) deny("Die Anmeldung für diese Woche ist noch nicht geöffnet");
       let a = db.attendance.find(x => x.session_id === sid && x.user_id === user);
@@ -546,6 +548,7 @@ function makeDemoBackend() {
       if (on) db.feedback_votes.push({ feedback_id: id, user_id: me(), created_at: now() }); save();
     },
     async setMark(sid, user, mark) {
+      const ss = db.sessions.find(x => x.id === sid); if (mark && ss && inPause(ss.session_date)) deny("In der Saisonpause findet kein Training statt");
       if (!staff()) deny("Nur Trainer und Admins können markieren");
       let a = db.attendance.find(x => x.session_id === sid && x.user_id === user);
       if (!a) { a = { session_id: sid, user_id: user, status: null, coach_mark: null }; db.attendance.push(a); }
@@ -643,7 +646,7 @@ async function loadAll() {
   if (!S.me || !S.me.approved) { S.profiles = []; S.groups = []; S.settings = null; return; }
   const [profiles, groups, settings, plans, exercises] = await Promise.all([S.be.profiles(), S.be.groups(), S.be.settings(), S.be.plans(), S.be.exercises()]);
   S.profiles = profiles.sort(byName); S.groups = groups; S.settings = settings; S.plans = plans; S.exercises = exercises;
-  S.sheetCache = {};
+  S.sheetCache = {}; S.sheetChoice = {}; S.loadedAt = Date.now();
   S.emails = {};
   if (isStaff()) (await S.be.emails()).forEach(r => S.emails[r.id] = r.email);
   await Promise.all([loadSessions(), reloadPerf()]);
@@ -687,8 +690,13 @@ function findExercise(text) {
 }
 
 /* ───────────── Termin-Logik ───────────── */
-const REASONS = { krank: "Krank", verletzt: "Verletzt", uni: "Uni / Prüfung", arbeit: "Arbeit", sonstiges: "Sonstiges", fortbildung: "Fortbildung" };
-const ATHLETE_REASONS = ["krank", "verletzt", "uni", "arbeit", "sonstiges"];
+const REASONS = { krank: "Krank", verletzt: "Verletzt", uni: "Uni / Prüfung", arbeit: "Arbeit", urlaub: "Urlaub", heimat: "Heimatbesuch", sonstiges: "Sonstiges", fortbildung: "Fortbildung" };
+const ATHLETE_REASONS = ["krank", "verletzt", "uni", "arbeit", "urlaub", "heimat", "sonstiges"];
+// Diese Gründe zählen nicht als Fehlen (das Training fällt für die Person aus der Statistik)
+const NEUTRAL_REASONS = ["urlaub", "heimat"];
+// Saisonpause: Kalendereintrag der Art „pause“
+const pauseOn = d => (S.calendar || []).find(e => e.kind === "pause" && d >= e.start_date && d <= (e.end_date || e.start_date)) || null;
+const sessOff = s => s.cancelled || !!pauseOn(s.session_date);
 const COACH_REASONS = ["fortbildung", "krank", "arbeit", "sonstiges"];
 const attOf = (sid, u) => S.att.find(a => a.session_id === sid && a.user_id === u);
 const privOf = (sid, u) => S.priv.find(a => a.session_id === sid && a.user_id === u);
@@ -704,7 +712,7 @@ function countsOf(s) {
 }
 function nextSession() {
   const t = todayIso(), now = new Date(Date.now() - 2 * 3600000).toTimeString().slice(0, 5);
-  return S.sessions.find(s => !s.cancelled && (s.session_date > t || (s.session_date === t && (!s.start_time || hhmm(s.start_time) >= now)))) || null;
+  return S.sessions.find(s => !sessOff(s) && (s.session_date > t || (s.session_date === t && (!s.start_time || hhmm(s.start_time) >= now)))) || null;
 }
 
 /* ───────────── Ansichten ───────────── */
@@ -764,7 +772,8 @@ function demoBar() {
   const opts = S.be.users().map(u => `<option value="${esc(u.id)}" ${u.id === S.user.id ? "selected" : ""}>${esc(u.display_name)} · ${ROLE_LABEL[u.role]}${u.approved ? "" : " (wartet)"}</option>`).join("");
   return `<div class="demo-bar"><div class="in"><b>Demo</b><span class="muted">Ansicht als</span>
     <select data-change="demoUser" aria-label="Demo-Person wählen">${opts}</select>
-    <button class="btn sm ghost" data-act="demoExit">Beenden</button></div></div>`;
+    <button class="btn sm ghost" data-act="demoExit">Beenden</button></div>
+    ${LS.get("la_demo_hint_seen", false) ? "" : `<div class="in demo-hint small"><span class="grow">Zum Ausprobieren: Alle Namen und Daten sind ausgedacht und bleiben nur auf deinem Gerät. Oben wählst du, als wer du die App siehst – Athlet, Trainer oder Admin.</span><button class="iconbtn" data-act="demoHintOk" aria-label="Hinweis schließen">${ICON.x}</button></div>`}</div>`;
 }
 function viewTop() {
   const name = (S.settings && S.settings.team_name) || "LT DSHS Köln";
@@ -911,27 +920,49 @@ function dayChips(info, sess) {
   return `<span class="chip">${esc(tm && place ? `${place} · ${tm[0].replace(".", ":")}` : info)}</span>`;
 }
 // Blöcke aus Leerzeilen; an Krafttagen je zwei Übungen zusammen (Supersatz)
+// Aufwärmen am Krafttag (Rad, Ergometer, Laufband …) steht immer einzeln vor den Supersätzen
+const WARMUP_RE = /(^|[\s.])(rad|fahrrad|ergo(meter)?|rudern|rudergerät|crosstrainer|laufband|seilspringen|einlaufen|eingehen|(auf|er)wärm[a-zäöüß]*|warm ?up)(?![a-zäöüß])/i;
 function itemGroups(d) {
   const blocks = [];
   d.items.forEach(it => { if (!blocks.length || it.gap) blocks.push([]); blocks[blocks.length - 1].push(it); });
   if (!/kraft/i.test(d.title || "")) return blocks.map(items => ({ items }));
   const out = [];
-  blocks.forEach(b => { if (b.length === 1) out.push({ items: b }); else for (let i = 0; i < b.length; i += 2) out.push({ items: b.slice(i, i + 2), pair: b.length > 1 && i + 1 < b.length }); });
+  blocks.forEach(b => {
+    b = b.slice();
+    while (b.length && WARMUP_RE.test(b[0].text.trim())) out.push({ items: [b.shift()], warmup: true });
+    if (!b.length) return;
+    if (b.length === 1) return out.push({ items: b });
+    // Gerade Anzahl → Paare (Supersätze); ungerade Gruppe (z. B. 3 Übungen) bleibt zusammen, wie im Plan
+    if (b.length % 2 === 0) for (let i = 0; i < b.length; i += 2) out.push({ items: b.slice(i, i + 2), pair: true });
+    else out.push({ items: b, pair: true });
+  });
   return out;
+}
+// Zeilen wie „Djamil & Ole“ oder „Alternativ Biene“ sind Hinweise, für wen die folgenden Übungen gelten
+function itemKind(text) {
+  const t = text.trim();
+  if (/^(alternativ|oder)$/i.test(t)) return "or";
+  const first = new Set(S.profiles.map(p => firstName(p.display_name).toLowerCase()).filter(n => n.length >= 2));
+  const words = t.replace(/^(alternativ|nur|für)\s+/i, "").split(/\s*(?:&|\+|,|\/|\bund\b)\s*/i).map(w => w.trim().toLowerCase()).filter(Boolean);
+  if (words.length && words.length <= 6 && words.every(w => first.has(w))) return "who";
+  return "";
 }
 function renderDays(days, mon, live) {
   const t = todayIso();
   return days.map(d => {
-    const date = addDays(mon, d.day), sess = live ? S.sessions.filter(s => s.session_date === date && !s.cancelled) : [];
+    const date = addDays(mon, d.day), sess = live ? S.sessions.filter(s => s.session_date === date && !sessOff(s)) : [];
     const empty = !d.title && !d.items.length && !d.info;
     return `<section class="daycard ${live && date === t ? "today" : ""} ${empty ? "empty" : ""}">
       <div class="dayhead"><span class="dayname">${WDL[d.day]}</span>${live ? `<span class="muted small">${dm(date)}</span>` : ""}
         ${dayChips(d.info, sess)}</div>
       ${d.title ? `<div class="daytitle">${esc(d.title)}</div>` : ""}
       ${(d.titleDetails || []).length ? `<div class="small muted">${d.titleDetails.map(esc).join(" · ")}</div>` : ""}
-      ${d.items.length ? `<ul class="items">${itemGroups(d).map(g => `<li class="grp ${g.pair ? "pair" : ""}">${g.items.map(it => {
+      ${d.items.length ? `<ul class="items">${itemGroups(d).map(g => `<li class="grp ${g.pair ? "pair" : ""} ${g.warmup ? "warmup" : ""}">${g.warmup ? '<span class="wutag">Aufwärmen</span>' : ""}${g.items.map(it => {
+        const kind = itemKind(it.text);
+        if (kind === "or") return `<div class="itemlabel">oder</div>`;
+        if (kind === "who" && !it.details.length) return `<div class="itemlabel who">${esc(it.text)}</div>`;
         const ex = live ? findExercise(it.text) : null;
-        return `<button class="item" ${live ? `data-act="itemInfo" data-text="${esc(it.text)}"` : 'type="button" tabindex="-1"'}>
+        return `<button class="item${/^alternativ\b/i.test(it.text) ? " altitem" : ""}" ${live ? `data-act="itemInfo" data-text="${esc(it.text)}"` : 'type="button" tabindex="-1"'}>
           <span class="it ${ex ? "known" : ""}">${esc(it.text)}${ex && (ex.video_path || ex.video_url) ? ` <span class="vid">${ICON.video}</span>` : ""}</span>
           ${it.details.length ? `<span class="det">${it.details.map(esc).join("<br>")}</span>` : ""}</button>`;
       }).join("")}</li>`).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
@@ -960,7 +991,7 @@ function viewExercises() {
   list.forEach(e => (cats[e.category || "Ohne Kategorie"] = cats[e.category || "Ohne Kategorie"] || []).push(e));
   const keys = Object.keys(cats).sort((a, b) => a === "Ohne Kategorie" ? 1 : b === "Ohne Kategorie" ? -1 : a.localeCompare(b, "de"));
   return `<div class="searchrow"><input type="search" placeholder="Übung oder Abkürzung suchen" value="${esc(S.exSearch)}" data-input="exSearch" aria-label="Suchen">
-      <button class="btn" data-act="exNew">+ Übung</button></div>
+      ${isStaff() ? `<button class="btn" data-act="exNew">+ Übung</button>` : ""}</div>
     ${keys.length ? `<div class="card flush">${keys.map(k => `<div class="subhead">${esc(k)} · ${cats[k].length}</div>${cats[k].map(e => `
       <button class="row" data-act="exOpen" data-id="${esc(e.id)}"><span class="grow"><span class="name">${esc(e.name)}</span>
         <span class="meta">${[e.abbreviation, e.description].filter(Boolean).map(esc).join(" · ") || "&nbsp;"}</span></span>
@@ -969,17 +1000,25 @@ function viewExercises() {
 }
 
 /* ───── Termine ───── */
+// Für Trainer/Admins direkt auf der Karte: wer abgesagt hat und warum
+function absentLine(s) {
+  const no = rosterOf(s).filter(p => { const a = attOf(s.id, p.id); return a && a.status === "no"; });
+  if (!no.length) return "";
+  return `<div class="small absentline"><b>Abgesagt:</b> ${no.map(p => { const pr = privOf(s.id, p.id);
+    return esc(p.display_name.split(" ")[0]) + (pr && (pr.reason || pr.note) ? ` <span class="muted">(${esc([REASONS[pr.reason], pr.note].filter(Boolean).join(": "))})</span>` : ""); }).join(", ")}</div>`;
+}
 function sessionCard(s, compact) {
   const a = attOf(s.id, S.me.id), pr = privOf(s.id, S.me.id), c = countsOf(s);
   const head = `<div class="sesshead"><div class="sessdate"><b>${WD[dowOf(s.session_date)]}</b><span>${dm(s.session_date)}</span></div>
-    <div class="grow"><div class="sesstitle">${esc(s.title || "Training")}${s.cancelled ? ' <span class="chip off">abgesagt</span>' : ""}</div>
+    <div class="grow"><div class="sesstitle">${esc(s.title || "Training")}${s.cancelled ? ' <span class="chip off">fällt aus</span>' : pauseOn(s.session_date) ? ' <span class="chip off">Saisonpause</span>' : ""}</div>
     <div class="small muted">${[hhmm(s.start_time) && hhmm(s.start_time) + " Uhr", s.location].filter(Boolean).map(esc).join(" · ")}</div>
     ${s.note ? `<div class="small">${esc(s.note)}</div>` : ""}</div></div>`;
-  if (s.cancelled) return `<div class="card sess cancelled">${head}</div>`;
+  if (sessOff(s)) return `<div class="card sess cancelled">${head}${isStaff() && s.cancelled ? `<div class="btns"><button class="btn sm ghost" data-act="sessCancel" data-id="${esc(s.id)}" data-v="0">Findet doch statt</button></div>` : ""}</div>`;
   const past = s.session_date < todayIso(), open = weekOpen(mondayOf(s.session_date));
   const away = coachesAway(s);
   const awayLine = away.length ? `<div class="small awayline">Nicht da: ${away.map(p => { const pr2 = privOf(s.id, p.id); return esc(p.display_name) + (isStaff() && pr2 && (pr2.reason || pr2.note) ? ` (${esc([REASONS[pr2.reason], pr2.note].filter(Boolean).join(": "))})` : ""); }).join(", ")}</div>` : "";
-  const counts = `<button class="counts" data-act="sessOpen" data-id="${esc(s.id)}"><span><b>${c.yes}</b> dabei</span><span><b>${c.no}</b> abgesagt</span><span><b>${c.open}</b> offen</span>${ICON.chev}</button>`;
+  const counts = `<button class="counts" data-act="sessOpen" data-id="${esc(s.id)}"><span><b>${c.yes}</b> dabei</span><span><b>${c.no}</b> abgesagt</span><span><b>${c.open}</b> offen</span>${ICON.chev}</button>`
+    + (isStaff() ? absentLine(s) : "");
   if (isCoach(S.me)) {
     const meAway = a && a.status === "no";
     return `<div class="card sess">${head}${awayLine}${past ? "" : `<div class="resp one">${meAway
@@ -1011,7 +1050,10 @@ function viewTraining() {
   const past = S.sessions.filter(s => s.session_date < t && s.session_date >= addDays(t, -14)).reverse(); // ältere nur noch in der Statistik
   const byWeek = {};
   upcoming.forEach(s => (byWeek[mondayOf(s.session_date)] = byWeek[mondayOf(s.session_date)] || []).push(s));
-  let html = isStaff() ? `<div class="btns" style="margin:0 0 6px"><button class="btn ghost" data-act="sessNew">+ Termin</button></div>` : "";
+  let html = isStaff() ? `<div class="btns" style="margin:0 0 6px"><button class="btn ghost" data-act="sessNew">+ Termin</button><button class="btn ghost" data-act="pauseNew">+ Saisonpause</button></div>` : "";
+  const pz = pauseOn(t) || (S.calendar || []).filter(e => e.kind === "pause" && e.start_date > t && e.start_date <= addDays(t, 14)).sort((a, b) => a.start_date.localeCompare(b.start_date))[0];
+  if (pz) html += `<div class="card notice-card pausecard"><b>${pz.start_date <= t ? "Saisonpause" : "Bald Saisonpause"}${pz.title && pz.title !== "Saisonpause" ? ": " + esc(pz.title) : ""}</b>
+    <div class="small muted">${fmtDay(pz.start_date)} – ${fmtDay(pz.end_date || pz.start_date)} · kein Training, nichts zählt in die Statistik</div>${isStaff() ? `<div class="btns"><button class="btn sm ghost" data-act="calOpen" data-id="${esc(pz.id)}">Bearbeiten</button></div>` : ""}</div>`;
   const weeks = Object.keys(byWeek).sort();
   if (!weeks.length) html += `<div class="card muted">Keine kommenden Termine.</div>`;
   weeks.forEach(w => {
@@ -1022,7 +1064,7 @@ function viewTraining() {
   });
   if (past.length) {
     html += `<h2>Vergangene Termine</h2>`;
-    html += S.showPast ? past.map(s => sessionCard(s)).join("") : `<button class="btn ghost block" data-act="showPast">${past.length} Termine der letzten 2 Wochen anzeigen</button>`;
+    html += S.showPast ? past.map(s => sessionCard(s)).join("") + `<button class="btn ghost block" data-act="showPast" data-v="0">Vergangene Termine ausblenden</button>` : `<button class="btn ghost block" data-act="showPast">${past.length} Termine der letzten 2 Wochen anzeigen</button>`;
   }
   html += `<p class="small muted" style="margin:10px 4px">${isStaff() ? "Angezeigt werden diese und nächste Woche. Ältere Termine zählen nur noch in der Statistik (Leistung → Übersicht)." : `${showNext ? "" : "Die nächste Woche erscheint, sobald die Anmeldung geöffnet ist. "}Absagegründe sehen nur Trainer und Admins. Alle sehen, wer zugesagt hat.`}</p>`;
   return html;
@@ -1043,23 +1085,21 @@ function viewAdminHelp() {
   return `<div class="btns" style="margin:0 0 10px"><button class="btn ghost" data-act="moreView" data-v="settings">← Zurück zu den Einstellungen</button></div>
   <div class="card helptext"><h3>Admin-Handbuch</h3><p class="small muted">Nur für Admins sichtbar.</p>
   <h4>Rollen</h4><div class="tablewrap"><table class="grid roles"><tr><th></th><th>Athlet</th><th>Trainer</th><th>Admin</th></tr>
-    ${R("Wochenplan ansehen, zu-/absagen, eigene Werte", 1, 1, 1)}${R("Übungen anlegen, Wettkampfergebnisse eintragen", 1, 1, 1)}
-    ${R("Absagegründe, Verlauf, Statistik sehen", 0, 1, 1)}${R("Freischalten, Gruppen zuordnen, Plan hochladen", 0, 1, 1)}
-    ${R("Woche öffnen, Termine, Tests, Normen, Verletzungen", 0, 1, 1)}${R("Rollen vergeben, Teamname, Backup, Feedback", 0, 0, 1)}</table></div>
+    ${R("Wochenplan ansehen, zu-/absagen, eigene Werte und Beteiligung", 1, 1, 1)}${R("Wettkampfergebnisse eintragen", 1, 1, 1)}
+    ${R("Übungen anlegen, Plan hochladen", 0, 1, 1)}${R("Absagegründe, Verlauf, Statistik sehen", 0, 1, 1)}${R("Freischalten, Gruppen zuordnen", 0, 1, 1)}
+    ${R("Woche öffnen, Termine, Saisonpause, Tests, Normen, Verletzungen", 0, 1, 1)}${R("Rollen vergeben, Teamname, Backup, Feedback", 0, 0, 1)}</table></div>
   <h4>Neue Mitglieder</h4><p>Wer den Link hat, kann sich registrieren, sieht aber nichts, bis ein Trainer oder Admin ihn unter <b>Mehr → Team</b> freischaltet. Schalte nur Leute frei, die du kennst. Trainer bekommen ihre Rolle im Profil (Name antippen → Rolle).</p>
   <h4>Trainingsanmeldung</h4><p>Athleten können erst zu-/absagen, wenn die Woche geöffnet ist („Jetzt öffnen“ unter Termine, oder automatisch unter Einstellungen → Trainingsanmeldung). Trainer sagen nicht zu, können aber „Ich bin nicht da“ eintragen. Wer als Admin/Trainer selbst trainiert, setzt in „Mein Konto“ den Haken „Ich trainiere selbst mit“.</p>
-  <h4>Alte Trainings</h4><p>Trainings, die älter als 14 Tage sind, werden automatisch zu einer Wochenstatistik pro Person zusammengefasst (zugesagt, abgesagt, keine Antwort, zu spät, nicht erschienen, umentschieden, Anzahl je Absagegrund). Danach werden die einzelnen Termine samt Absagegründen und Freitext gelöscht. Die Statistik bleibt vollständig, gespeichert wird aber nur das Nötigste.</p>
-  <h4>Wettkämpfe melden</h4><p>Beim Anlegen eines Wettkampfs (Termine → Saison & Wettkämpfe → + Eintrag) wählt der Trainer aus, wen er melden möchte. Nur diese Personen sehen den Wettkampf. Sie bekommen auf der Startseite eine Anfrage und sagen zu oder ab. Absprachen laufen über WhatsApp. Danach kann der Trainer die Teilnehmer und Antworten jederzeit anpassen.</p>
-  <h4>Übungsvideos</h4><p>Ein Handyvideo von 20–30 s hat schnell 30–60 MB, der kostenlose Speicher fasst 1 GB. Besser: das Video auf YouTube als <b>„nicht gelistet“</b> hochladen und den Link bei der Übung eintragen. Es wird direkt in der App abgespielt und braucht bei uns keinen Speicher. „Privat“ geht nicht, denn private Videos kann nur der Besitzer sehen.</p>
-  <h4>Datenmenge</h4><p>Die kostenlose Supabase-Stufe hat 500 MB Datenbank und 1 GB für Videos. Eine Trainingsgruppe mit 25 Personen braucht pro Jahr grob 1–3 MB: Wochenpläne etwa 20 KB pro Upload, Testwerte und Wochenstatistik nur wenige KB. Das reicht für viele Jahre. Platz brauchen nur hochgeladene Videos, rund 5–30 MB pro Clip.</p>
-  <h4>Backup</h4><p>Supabase macht in der kostenlosen Stufe keine automatischen Backups. Lade regelmäßig unter Einstellungen → Admin → Backup eine Sicherung herunter. Videos sind nicht enthalten.</p>
-  <h4>Supabase pausiert</h4><p>Nach etwa 7 Tagen ohne Nutzung pausiert das kostenlose Projekt (z. B. in den Ferien). Dann im Supabase-Dashboard auf <b>Restore</b> klicken. Die Daten bleiben erhalten.</p>
-  <h4>Datenschutz und Sicherheit</h4>
-  <p>Im öffentlichen GitHub-Repository liegt nur der <b>Programmcode</b>, keine Daten. Konten, Pläne, Zu-/Absagen, Testwerte, Verletzungen und Feedback liegen nur in der Supabase-Datenbank.</p>
-  <p>Die Project URL und der publishable Key in <code>config.js</code> sind öffentlich. Ohne freigeschaltetes Konto kommt man trotzdem an nichts heran, weil die Datenbank die Rechte bei jeder Anfrage selbst prüft.</p>
-  <p>Der <b>secret- bzw. service_role-Key</b> aus Supabase umgeht alle Regeln. Er gehört nie ins Repo, in die App oder in einen Chat.</p>
-  <p>Verletzungen sind Gesundheitsdaten. Sichtbar sind sie nur für Trainer, Admins und die Person selbst. Sag neuen Mitgliedern kurz, was gespeichert wird und wer es sieht.</p>
-  <h4>Updates</h4><p>Bei einer neuen Version <code>supabase/alles_in_einem.sql</code> <b>vor</b> dem Mergen komplett im Supabase SQL Editor ausführen. Die Datei darf beliebig oft laufen, vorhandene Daten bleiben erhalten. Danach in der App unter Einstellungen → Version → Aktualisieren.</p>
+  <h4>Saisonpause und Ausfall</h4><p><b>Saisonpause:</b> Termine → „+ Saisonpause“ (von–bis). In der Zeit fällt jedes Training aus und nichts zählt in die Statistik. <b>Einzelnes Training:</b> Termin antippen → „Training fällt aus“. Absagen wegen <i>Urlaub</i> oder <i>Heimatbesuch</i> zählen nicht als Fehlen.</p>
+  <h4>Alte Trainings</h4><p>Nach 14 Tagen bleiben von einem Training nur die Zahlen für die Statistik. Einzelne Absagen, Gründe und Freitext werden gelöscht.</p>
+  <h4>Wettkämpfe melden</h4><p>Beim Anlegen eines Wettkampfs wählt der Trainer aus, wen er melden möchte. Nur diese Personen sehen ihn und sagen auf der Startseite zu oder ab. Teilnehmer und Antworten lassen sich danach jederzeit ändern.</p>
+  <h4>Übungsvideos</h4><p>Am besten auf YouTube als <b>„nicht gelistet“</b> hochladen und den Link bei der Übung eintragen. Das Video läuft direkt in der App und braucht keinen Speicher. „Privat“ geht nicht, private Videos sieht nur der Besitzer.</p>
+  <h4>Datenmenge</h4><p>Kostenlos sind 500 MB Datenbank und 1 GB für Videos. Die Gruppe braucht nur wenige MB pro Jahr, Platz kosten nur hochgeladene Videos.</p>
+  <h4>Backup</h4><p>Supabase sichert in der kostenlosen Stufe nicht automatisch. Lade regelmäßig unter Einstellungen → Admin → Backup eine Sicherung herunter. Videos sind nicht enthalten.</p>
+  <h4>Supabase pausiert</h4><p>Kostenlose Supabase-Projekte werden nach 7 Tagen <b>ohne jeden Zugriff</b> angehalten, um Rechenleistung zu sparen. Die App zeigt dann nur noch einen Verbindungsfehler, die Daten bleiben aber erhalten. Wieder starten: im Supabase-Dashboard beim Projekt auf <b>Restore</b> klicken (dauert ein paar Minuten).</p>
+    <p>Damit es gar nicht so weit kommt, ruft eine kleine GitHub-Aktion zweimal pro Woche die Datenbank kurz auf (Ordner <code>.github/workflows</code>). Kostenlos, liest keine Daten. Unter GitHub → <b>Actions</b> siehst du, ob sie läuft. GitHub schaltet solche geplanten Aktionen ab, wenn im Repository 60 Tage lang nichts passiert. Dann dort auf „Enable workflow“ klicken.</p>
+  <h4>Datenschutz</h4><p>Im öffentlichen GitHub-Repository liegt nur der Programmcode. Alle Daten liegen in Supabase und sind nur mit freigeschaltetem Konto erreichbar. Der <b>secret- bzw. service_role-Key</b> umgeht alle Regeln und gehört nie ins Repo, in die App oder in einen Chat. Verletzungen sehen nur Trainer, Admins und die Person selbst.</p>
+  <h4>Updates</h4><p>Bringt ein Update eine geänderte SQL-Datei mit, diese <b>vor</b> dem Mergen komplett im Supabase SQL Editor ausführen. Sie darf beliebig oft laufen, vorhandene Daten bleiben erhalten. Danach in der App unter Einstellungen → Version → Aktualisieren.</p>
   </div>
   <div class="card helptext">${planFormatHtml()}</div>`;
 }
@@ -1233,7 +1273,7 @@ function templateRow(t, i) {
 
 /* ───────────── Leistung: Logik ───────────── */
 const CAT_LABEL = { sprint: "Sprint", sprung: "Sprung", kraft: "Kraft", sonstiges: "Sonstiges" };
-const KIND_LABEL = { phase: "Phase", wettkampf: "Wettkampf", testwoche: "Testwoche", sonstiges: "Termin" };
+const KIND_LABEL = { phase: "Phase", wettkampf: "Wettkampf", testwoche: "Testwoche", pause: "Saisonpause", sonstiges: "Termin" };
 const nowHm = () => new Date().toTimeString().slice(0, 5);
 function parseVal(str) {
   const t = String(str || "").trim().replace(/\s+/g, "").replace(/,/g, ".");
@@ -1284,25 +1324,28 @@ function normStatus(u) {
 }
 function attendanceStats(u, sessions, att) {
   const t = todayIso(), hm = nowHm(), joined = String((person(u) || {}).created_at || "").slice(0, 10);
-  const res = { counted: 0, attended: 0, yes: 0, no: 0, open: 0, late: 0, noShow: 0, flipped: 0, excluded: 0, reasons: {} };
+  const res = { counted: 0, attended: 0, yes: 0, no: 0, open: 0, late: 0, noShow: 0, flipped: 0, excluded: 0, excused: 0, reasons: {}, recent: [] };
   (S.stats.weekly || []).filter(w => w.user_id === u && w.week_start >= mondayOf(S.stats.from || t)).forEach(w => {
     res.counted += w.counted; res.attended += w.attended; res.yes += w.n_yes; res.no += w.n_no; res.open += w.n_open;
-    res.late += w.n_late; res.noShow += w.n_no_show; res.flipped += w.n_flipped; res.excluded += w.n_skipped;
+    res.late += w.n_late; res.noShow += w.n_no_show; res.flipped += w.n_flipped; res.excluded += w.n_skipped; res.excused += w.n_excused || 0;
     Object.entries(w.reasons || {}).forEach(([k, v]) => res.reasons[k] = (res.reasons[k] || 0) + Number(v));
   });
   sessions.forEach(s => {
-    if (s.cancelled || s.session_date > t || (s.session_date === t && s.start_time && hhmm(s.start_time) > hm)) return;
+    if (sessOff(s) || s.session_date > t || (s.session_date === t && s.start_time && hhmm(s.start_time) > hm)) return;
     if (joined && s.session_date < joined) return;
     if (injuredOn(u, s.session_date, "exclude_attendance")) { res.excluded++; return; }
-    res.counted++;
     const a = att.find(x => x.session_id === s.id && x.user_id === u);
     const st = a && a.status, mk = a && a.coach_mark;
+    const pr = st === "no" ? (S.stats.priv || []).find(x => x.session_id === s.id && x.user_id === u) : null;
+    if (st === "no") res.recent.push({ date: s.session_date, reason: pr ? pr.reason : null, note: pr ? pr.note : "" });
+    if (st === "no" && pr && NEUTRAL_REASONS.includes(pr.reason)) { res.excused++; res.reasons[pr.reason] = (res.reasons[pr.reason] || 0) + 1; return; }
+    res.counted++;
     if (st === "yes") res.yes++; else if (st === "no") res.no++; else res.open++;
     if (mk === "late") res.late++;
     if (mk === "no_show") res.noShow++;
     if ((st === "yes" && mk !== "no_show") || mk === "late") res.attended++;
     if (st === "no" && (S.stats.log || []).some(l => l.session_id === s.id && l.user_id === u && l.status === "yes")) res.flipped++;
-    if (st === "no") { const pr = (S.stats.priv || []).find(x => x.session_id === s.id && x.user_id === u); const k = pr ? pr.reason : "unbekannt"; res.reasons[k] = (res.reasons[k] || 0) + 1; }
+    if (st === "no") { const k = pr ? pr.reason : "unbekannt"; res.reasons[k] = (res.reasons[k] || 0) + 1; }
   });
   res.rate = res.counted ? Math.round(res.attended / res.counted * 100) : null;
   return res;
@@ -1397,6 +1440,7 @@ function viewLeistung() {
   if (S.perfView === "mine") {
     const inj = currentInjury(S.me.id);
     if (inj) html += `<div class="notice"><div class="grow"><b>Als verletzt eingetragen</b> seit ${dm(inj.start_date)}${inj.note ? " – " + esc(inj.note) : ""}${inj.exclude_tests ? "<div class='small muted'>Fehlende Tests werden nicht angerechnet.</div>" : ""}</div></div>`;
+    if (trainsP(S.me)) html += myAttendanceCard();
     if (!infoOf(S.me.id).sex && S.norms.length) html += `<p class="small muted">Für den Abgleich mit den Normen trägt dein Trainer noch ein, ob für dich die Normen der Jungs oder der Mädels gelten.</p>`;
     html += `<div class="card flush">${testRows(S.me.id)}</div><p class="small muted" style="margin:8px 4px">Krafttests trägst du selbst ein (Wert antippen). Sprint- und Sprungtests trägt der Trainer ein. Deine Werte sehen nur du und die Trainer.</p>`;
     return html;
@@ -1406,7 +1450,33 @@ function viewLeistung() {
   if (S.perfView === "enter") return html + viewEnter();
   return html + viewOverview();
 }
-const rateClass = r => r == null ? "r-na" : r >= 95 ? "r4" : r >= 85 ? "r3" : r >= 70 ? "r2" : r >= 50 ? "r1" : "r0";
+// Fließende Farbskala: Rot → Orange → Gelb → ab 75 % hellgrün → 100 % dunkelgrün
+const RATE_STOPS = [[0, [208, 59, 59]], [50, [236, 131, 90]], [65, [250, 178, 25]], [75, [150, 200, 90]], [100, [24, 120, 56]]];
+function rateColor(r) {
+  if (r == null) return "var(--line)";
+  r = Math.max(0, Math.min(100, r));
+  let i = 1; while (i < RATE_STOPS.length - 1 && r > RATE_STOPS[i][0]) i++;
+  const [a, ca] = RATE_STOPS[i - 1], [b, cb] = RATE_STOPS[i], t = (r - a) / (b - a);
+  return "rgb(" + ca.map((v, k) => Math.round(v + (cb[k] - v) * t)).join(",") + ")";
+}
+const rateDot = r => `<i class="ratedot" style="background:${rateColor(r)}"></i>`;
+const rateBar = (r, big) => `<span class="bar${big ? " big" : ""}" aria-hidden="true"><i style="width:${r ?? 0}%;background:${rateColor(r)}"></i></span>`;
+const RATE_LEGEND = `<div class="ratelegend small muted"><span class="rategrad" aria-hidden="true"></span><span class="rateticks"><span>0 %</span><span>50</span><span>75</span><span>100 %</span></span></div>`;
+// Eigene Trainingsbeteiligung für Athleten
+function myAttendanceCard() {
+  if (!S.stats.loaded || S.stats.from !== addDays(todayIso(), -STAT_RANGES[S.statRange][1])) {
+    loadStats().then(render).catch(e => toast(deErr(e), "error"));
+    return `<div class="card muted">Trainingsbeteiligung wird geladen …</div>`;
+  }
+  const a = attendanceStats(S.me.id, S.stats.sessions, S.stats.att);
+  const seg = Object.entries(STAT_RANGES).map(([k, [l]]) => `<button data-act="statRange" data-v="${k}" aria-pressed="${S.statRange === k}">${l}</button>`).join("");
+  return `<h2>Deine Trainingsbeteiligung</h2><div class="card myatt"><div class="seg" style="margin-bottom:12px">${seg}</div>
+    <div class="myrate"><b>${rateDot(a.rate)}${a.rate == null ? "–" : a.rate + " %"}</b><span class="small muted">${a.counted ? `${a.attended} von ${a.counted} Trainings da` : "Noch keine gezählten Trainings"}</span></div>
+    ${rateBar(a.rate, true)}
+    <p class="small muted" style="margin:10px 0 0">${[a.late && a.late + "× zu spät", a.excused && a.excused + "× Urlaub/Heimatbesuch (zählt nicht)", a.excluded && a.excluded + " Trainings wegen Verletzung nicht gezählt"].filter(Boolean).join(" · ") || "Gezählt werden die gemeinsamen Trainings, bei denen du zugesagt hast und da warst."}</p></div>`;
+}
+// „2× Krank, 1× Urlaub“ – häufigster Grund zuerst
+const reasonSummary = a => Object.entries(a.reasons).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${v}× ${esc(REASONS[k] || (k === "unbekannt" || k === "ohne Angabe" ? "ohne Grund" : k))}`).join(", ");
 function viewOverview() {
   if (!S.stats.loaded || S.stats.from !== addDays(todayIso(), -STAT_RANGES[S.statRange][1])) {
     loadStats().then(render).catch(e => toast(deErr(e), "error"));
@@ -1421,17 +1491,18 @@ function viewOverview() {
   const seg = Object.entries(STAT_RANGES).map(([k, [l]]) => `<button data-act="statRange" data-v="${k}" aria-pressed="${S.statRange === k}">${l}</button>`).join("");
   return `<div class="seg" style="margin-bottom:12px">${seg}</div>
     <div class="stats" style="margin-bottom:12px">
-      <div class="stat"><b><i class="ratedot ${rateClass(avg)}"></i>${avg == null ? "–" : avg + " %"}</b><span>Ø Trainingsbeteiligung</span></div>
+      <div class="stat"><b>${rateDot(avg)}${avg == null ? "–" : avg + " %"}</b><span>Ø Trainingsbeteiligung</span></div>
       <div class="stat"><b>${metAll}/${rows.length}</b><span>erfüllen alle Normen</span></div>
       <div class="stat"><b>${rows.filter(r => r.inj).length}</b><span>verletzt</span></div></div>
     <div class="sortrow small muted">Sortieren: ${[["name", "Name"], ["rate", "Beteiligung"], ["norm", "Normen"]].map(([k, l]) => `<button class="linkbtn small" data-act="statSort" data-v="${k}" ${S.statSort === k ? 'aria-pressed="true"' : ""}>${l}</button>`).join(" · ")}</div>
     <div class="card flush overview">${sorted.map(({ p, a, n, inj }) => `<button class="row" data-act="athleteOpen" data-id="${esc(p.id)}">
       <span class="grow"><span class="name">${esc(p.display_name)} ${inj ? '<span class="chip off">verletzt</span>' : ""}</span>
       <span class="meta">${esc(groupName(p.plan_group_id) || "keine Gruppe")}${a.counted ? ` · ${a.attended}/${a.counted} Trainings` : ""}${a.flipped ? ` · ${a.flipped}× umentschieden` : ""}${a.late ? ` · ${a.late}× zu spät` : ""}</span>
-      <span class="bar big" aria-hidden="true"><i class="${rateClass(a.rate)}" style="width:${a.rate ?? 0}%"></i></span></span>
-      <span class="statcol"><b><i class="ratedot ${rateClass(a.rate)}"></i>${a.rate == null ? "–" : a.rate + " %"}</b><span class="small muted">${n.total || n.missing ? `Normen ${n.met}/${n.total + n.missing}` : "keine Norm"}</span></span>
+      ${reasonSummary(a) ? `<span class="meta">Abgesagt: ${reasonSummary(a)}</span>` : ""}
+      ${rateBar(a.rate, true)}</span>
+      <span class="statcol"><b>${rateDot(a.rate)}${a.rate == null ? "–" : a.rate + " %"}</b><span class="small muted">${n.total || n.missing ? `Normen ${n.met}/${n.total + n.missing}` : "keine Norm"}</span></span>
       <span class="chev">${ICON.chev}</span></button>`).join("") || `<div class="row muted">Noch keine Athleten</div>`}</div>
-    <div class="ratelegend small muted"><span><i class="ratedot r0"></i>&lt; 50 %</span><span><i class="ratedot r1"></i>50–69</span><span><i class="ratedot r2"></i>70–84</span><span><i class="ratedot r3"></i>85–94</span><span><i class="ratedot r4"></i>95–100 %</span></div>
+    ${RATE_LEGEND}
     <p class="small muted" style="margin:8px 4px">Trainingsbeteiligung: Anteil der vergangenen gemeinsamen Trainings, bei denen jemand da war (zugesagt und nicht als „nicht erschienen“ markiert). Zeiten mit Verletzung zählen nicht mit, wenn das so eingetragen ist. Normen: zuletzt gemessener Wert je Test.</p>`;
 }
 function viewEnter() {
@@ -1494,7 +1565,7 @@ function timelineHtml(entries, lo, hi, big) {
   const span = Math.max(1, (parseIso(hi) - parseIso(lo)) / 864e5), t = todayIso();
   const pos = d => Math.min(100, Math.max(0, (parseIso(d) - parseIso(lo)) / 864e5 / span * 100));
   const vis = e => (e.end_date || e.start_date) >= lo && e.start_date <= hi;
-  const phases = entries.filter(e => e.kind === "phase" && vis(e));
+  const phases = entries.filter(e => e.kind === "phase" && vis(e)), pauses = entries.filter(e => e.kind === "pause" && vis(e));
   const tests = entries.filter(e => e.kind === "testwoche" && vis(e));
   const comps = entries.filter(e => (e.kind === "wettkampf" || e.kind === "sonstiges") && vis(e));
   const allPh = entries.filter(e => e.kind === "phase");
@@ -1506,8 +1577,8 @@ function timelineHtml(entries, lo, hi, big) {
   for (let d = new Date(parseIso(lo).getFullYear(), parseIso(lo).getMonth() + 1, 1); iso(d) <= hi; d.setMonth(d.getMonth() + 1)) months.push(iso(d));
   return `<div class="tlwrap ${big ? "big" : ""}"><div class="tl" style="${big ? `width:${Math.max(100, span / 1.6)}%` : ""}">
     <div class="tl-months">${months.map(m => `<span style="left:${pos(m)}%">${new Date(m + "T12:00:00").toLocaleDateString("de-DE", { month: "short" })}</span>`).join("")}</div>
-    <div class="tl-lane ph">${phases.map(e => bar(e, "ph" + (allPh.indexOf(e) % PHASE_COLORS + 1) + (e.start_date <= t && (e.end_date || e.start_date) >= t ? " cur" : ""), 7)).join("")}</div>
-    <div class="tl-lane tw">${tests.map(e => bar(e, "tw", 7).replace(`<span>${esc(e.title)}</span>`, `<span>${big ? esc(e.title) : "TW"}</span>`)).join("")}</div>
+    <div class="tl-lane ph">${phases.map(e => bar(e, "ph" + (allPh.indexOf(e) % PHASE_COLORS + 1) + (e.start_date <= t && (e.end_date || e.start_date) >= t ? " cur" : ""), 7)).join("")}${pauses.map(e => bar(e, "pause", 1)).join("")}</div>
+    <div class="tl-lane tw">${tests.map(e => bar(e, "tw", 7).replace(`<span>${esc(e.title)}</span>`, big ? `<span>${esc(e.title)}</span>` : "")).join("")}</div>
     <div class="tl-lane wk">${comps.map((e, i) => `<button class="tl-dot ${e.kind}" style="left:${pos(e.start_date)}%" data-act="calOpen" data-id="${esc(e.id)}" title="${esc(e.title)} (${dm(e.start_date)})"></button>${big ? `<span class="tl-dotlabel ${i % 2 ? "alt" : ""}" style="left:${pos(e.start_date)}%">${esc(e.title)}</span>` : ""}`).join("")}</div>
     ${t >= lo && t <= hi ? `<div class="tl-today" style="left:${pos(t)}%"><span>heute</span></div>` : ""}</div></div>`;
 }
@@ -1532,7 +1603,7 @@ function viewSeason() {
     html += `<div class="card"><div class="tlhead"><span class="grow"><span class="small muted">Periodisierung · nächste Monate</span>${phase ? `<br><b>Jetzt: ${esc(phase.title)}</b>${phase.end_date ? ` <span class="small muted">bis ${dm(phase.end_date)}</span>` : ""}` : ""}</span>
       <button class="btn sm ghost" data-act="tlBig">Vergrößern</button></div>
       ${timelineHtml(entries, lo, hi, false)}
-      <div class="small muted tl-legend"><span><i class="lg ph1"></i>Phasen</span><span><i class="lg tw"></i>Testwoche</span><span><i class="lg wk"></i>Wettkampf</span></div></div>`;
+      <div class="small muted tl-legend"><span><i class="lg ph1"></i>Phasen</span><span><i class="lg tw"></i>Testwoche</span><span><i class="lg wk"></i>Wettkampf</span>${entries.some(e => e.kind === "pause") ? `<span><i class="lg pause"></i>Saisonpause</span>` : ""}</div></div>`;
   }
   const entryRow = e => {
     const inv = invitesOf(e.id), mine = myInvite(e.id);
@@ -1546,7 +1617,7 @@ function viewSeason() {
   const mName = k => new Date(k + "-01T12:00:00").toLocaleDateString("de-DE", { month: "long", year: "numeric" });
   html += Object.keys(months).length ? Object.entries(months).map(([k, list]) => `<h2>${esc(mName(k))}</h2><div class="card flush">${list.map(entryRow).join("")}</div>`).join("")
     : `<div class="card muted">${isStaff() ? "Keine kommenden Wettkämpfe, Testwochen oder Termine." : "Für dich stehen gerade keine Wettkämpfe oder Termine an."}</div>`;
-  if (past.length) html += S.showPastCal ? `<h2>Vergangen</h2><div class="card flush">${past.map(entryRow).join("")}</div>` : `<button class="btn ghost block" style="margin-top:14px" data-act="showPastCal">Vergangene Einträge anzeigen (${past.length})</button>`;
+  if (past.length) html += S.showPastCal ? `<h2>Vergangen</h2><div class="card flush">${past.map(entryRow).join("")}</div><button class="btn ghost block" style="margin-top:10px" data-act="showPastCal" data-v="0">Vergangene Einträge ausblenden</button>` : `<button class="btn ghost block" style="margin-top:14px" data-act="showPastCal">Vergangene Einträge anzeigen (${past.length})</button>`;
   if (!isStaff()) html += `<p class="small muted" style="margin:10px 4px">Wettkämpfe siehst du, wenn der Trainer dich dafür vorgesehen hat.</p>`;
   return html;
 }
@@ -1574,13 +1645,14 @@ function testSheet(u, tid) {
 }
 function athleteSheet(u) {
   const p = person(u), info = infoOf(u), a = attendanceStats(u, S.stats.sessions || [], S.stats.att || []), inj = injuriesOf(u);
-  const reasons = Object.entries(a.reasons).map(([k, v]) => `${esc(REASONS[k] || k)} ${v}`).join(", ");
+  const reasons = reasonSummary(a);
   const myComps = S.comps.filter(c => c.user_id === u).sort((x, y) => y.comp_date.localeCompare(x.comp_date)).slice(0, 8);
   sheet(`<h3>${esc(p.display_name)}</h3><p class="small muted">${esc(groupName(p.plan_group_id) || "keine Trainingsgruppe")}${S.emails[u] ? " · " + esc(S.emails[u]) : ""}</p>
     <div class="card"><div class="small muted" style="margin-bottom:6px">Trainingsbeteiligung (${esc(STAT_RANGES[S.statRange][0])})</div>
       <div class="stats"><div class="stat"><b>${a.rate == null ? "–" : a.rate + " %"}</b><span>${a.attended}/${a.counted} Trainings</span></div>
       <div class="stat"><b>${a.no}</b><span>abgesagt</span></div><div class="stat"><b>${a.open}</b><span>keine Antwort</span></div></div>
-      <p class="small" style="margin:10px 0 0">${[reasons && "Gründe: " + reasons, a.late && a.late + "× zu spät", a.noShow && a.noShow + "× nicht erschienen", a.flipped && a.flipped + "× erst zu-, dann abgesagt", a.excluded && a.excluded + " Trainings wegen Verletzung nicht gezählt"].filter(Boolean).join(" · ") || "Keine Auffälligkeiten."}</p></div>
+      <p class="small" style="margin:10px 0 0">${[reasons && "<b>Absagegründe:</b> " + reasons, a.late && a.late + "× zu spät", a.noShow && a.noShow + "× nicht erschienen", a.flipped && a.flipped + "× erst zu-, dann abgesagt", a.excused && a.excused + "× Urlaub/Heimatbesuch (zählt nicht)", a.excluded && a.excluded + " Trainings wegen Verletzung nicht gezählt"].filter(Boolean).join(" · ") || "Keine Auffälligkeiten."}</p>
+      ${a.recent.length ? `<div class="subhead" style="padding-left:0">Absagen der letzten 2 Wochen</div>${a.recent.slice().reverse().map(r => `<div class="small">${fmtDay(r.date)}: <b>${esc(REASONS[r.reason] || "ohne Grund")}</b>${r.note ? " – " + esc(r.note) : ""}</div>`).join("")}<p class="small muted" style="margin:6px 0 0">Ältere Absagen werden nur noch gezählt, ohne Datum und Text.</p>` : ""}</div>
     <form data-form="ainfo" data-uid="${esc(u)}" class="card"><div class="small muted" style="margin-bottom:6px">Für die Normen</div>
       <div class="seg" role="radiogroup">${[["m", "Jungs"], ["w", "Mädels"], ["", "offen"]].map(([v, l]) => `<label class="segopt"><input type="radio" name="sex" value="${v}" ${(info.sex || "") === v ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
       <div class="small muted" style="margin:10px 0 4px">Weitere Trainingsgruppen, deren Normen gelten</div>
@@ -1642,8 +1714,8 @@ function compSheet(id, asPb) {
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div></form>
     ${id ? `<div class="btns"><button class="btn danger block" data-act="compDelete" data-id="${esc(id)}">Ergebnis löschen</button></div>` : ""}`);
 }
-function calSheet(id) {
-  const e = id ? S.calendar.find(x => x.id === id) : { kind: "wettkampf", title: "", start_date: todayIso(), end_date: null, location: "", note: "" };
+function calSheet(id, kind) {
+  const e = id ? S.calendar.find(x => x.id === id) : { kind: kind || "wettkampf", title: kind === "pause" ? "Saisonpause" : "", start_date: todayIso(), end_date: kind === "pause" ? addDays(todayIso(), 13) : null, location: "", note: "" };
   if (id && !isStaff()) {
     const res = S.comps.filter(c => c.entry_id === id), mine = myInvite(id);
     sheet(`<h3>${esc(e.title)}</h3><p class="small muted">${KIND_LABEL[e.kind]} · ${fmtLong(e.start_date)}${e.end_date && e.end_date !== e.start_date ? " – " + fmtLong(e.end_date) : ""}${e.location ? " · " + esc(e.location) : ""}</p>
@@ -1662,7 +1734,8 @@ function calSheet(id) {
     <form data-form="cal" data-id="${esc(id || "")}" class="kind-${esc(e.kind)}">
       <label class="f"><span>Art</span><select name="kind" data-change="calKind">${Object.entries(KIND_LABEL).map(([k, l]) => `<option value="${k}" ${e.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>
         <div class="hint only-phase">Phasen (z. B. Allgemeine Vorbereitung, Hallensaison) erscheinen als farbige Balken in der Periodisierung.</div>
-        <div class="hint only-testwoche">Eine Testwoche dauert normalerweise eine Woche. Ohne Enddatum werden 7 Tage eingetragen.</div></label>
+        <div class="hint only-testwoche">Eine Testwoche dauert normalerweise eine Woche. Ohne Enddatum werden 7 Tage eingetragen.</div>
+        <div class="hint only-pause">In der Saisonpause findet kein Training statt: Termine fallen aus, niemand kann zu-/absagen oder zu spät kommen, nichts zählt in die Statistik. Für ein einzelnes ausfallendes Training: Termin antippen → „Training fällt aus“.</div></label>
       <label class="f"><span>Titel</span><input type="text" name="title" required maxlength="120" value="${esc(e.title)}"></label>
       <div class="two"><label class="f"><span>Von</span><input type="date" name="start" required value="${esc(e.start_date)}" data-change="calStart"></label>
       <label class="f"><span>Bis <span class="muted">(optional)</span></span><input type="date" name="end" value="${esc(e.end_date || "")}" data-change="calEnd"></label></div>
@@ -1722,6 +1795,7 @@ const perfActions = {
   },
   termView(el) { S.termView = el.dataset.v; render(); },
   calNew() { calSheet(null); },
+  pauseNew() { calSheet(null, "pause"); },
   tlBig() {
     const es = S.calendar, t = todayIso();
     const lo = es.reduce((m, e) => e.start_date < m ? e.start_date : m, addDays(t, -28)), hi = es.reduce((m, e) => (e.end_date || e.start_date) > m ? (e.end_date || e.start_date) : m, addDays(t, 120));
@@ -1742,7 +1816,7 @@ const perfActions = {
     if (!await ask("Eintrag löschen?", "Der Kalendereintrag wird gelöscht. Eingetragene Wettkampfergebnisse bleiben erhalten.", "Löschen", true)) return calSheet(el.dataset.id);
     await quiet(busy(null, async () => { await S.be.removeRow("calendar_entries", el.dataset.id); await reloadPerf(); closeSheet(); render(); }));
   },
-  showPastCal() { S.showPastCal = true; render(); },
+  showPastCal(el) { S.showPastCal = el.dataset.v !== "0"; render(); },
   moreView(el) { S.moreView = el.dataset.v; render(); },
   memberPerf(el) { closeSheet(); S.tab = "leistung"; S.perfView = "overview"; render(); loadStats().then(() => athleteSheet(el.dataset.id)).catch(e => toast(deErr(e), "error")); }
 };
@@ -1838,7 +1912,8 @@ const perfForms = {
     if (f.end.value && f.end.value < f.start.value) return toast("Das Ende liegt vor dem Beginn.", "error");
     const kind = f.kind.value;
     const row = { kind, title: f.title.value.trim(), start_date: f.start.value, end_date: f.end.value || (kind === "testwoche" ? addDays(f.start.value, 6) : null),
-      location: kind === "phase" ? "" : f.location.value.trim(), note: f.note.value.trim() };
+      location: kind === "phase" || kind === "pause" ? "" : f.location.value.trim(), note: f.note.value.trim() };
+    if (kind === "pause" && !row.title) row.title = "Saisonpause";
     if (f.dataset.id) row.id = f.dataset.id;
     const saved = await S.be.saveRow("calendar_entries", row);
     if (kind === "wettkampf") {
@@ -1918,7 +1993,7 @@ function absageSheet(sid, uidFor) {
   }
   sheet(`<h3>Absagen</h3><p class="small muted">${esc(s.title || "Training")} · ${fmtLong(s.session_date)}${forOther ? ` · für <b>${esc(person(uidFor).display_name)}</b>` : ""}</p>
     <form data-form="absage" data-id="${esc(sid)}" data-user="${esc(uidFor)}">
-      <div class="reasons">${ATHLETE_REASONS.map(k => [k, REASONS[k]]).map(([k, l]) => `<label class="opt"><input type="radio" name="reason" value="${k}" required ${pr && pr.reason === k ? "checked" : ""}><span><b>${l}</b></span></label>`).join("")}</div>
+      <div class="reasons">${ATHLETE_REASONS.map(k => [k, REASONS[k]]).map(([k, l]) => `<label class="opt"><input type="radio" name="reason" value="${k}" required ${pr && pr.reason === k ? "checked" : ""}><span><b>${l}</b>${NEUTRAL_REASONS.includes(k) ? '<span class="small muted">zählt nicht als Fehlen</span>' : ""}</span></label>`).join("")}</div>
       <label class="f"><span>Bemerkung <span class="muted">(bei „Sonstiges“ Pflicht)</span></span><textarea name="note" maxlength="300" rows="2">${esc(pr ? pr.note : "")}</textarea></label>
       <p class="small muted">Den Grund sehen nur Trainer und Admins.</p>
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Absagen</button></div></form>`);
@@ -1942,7 +2017,7 @@ function sessionSheet(sid) {
   sheet(`<h3>${esc(s.title || "Training")}</h3>
     <p class="small muted">${fmtLong(s.session_date)}${s.start_time ? " · " + hhmm(s.start_time) + " Uhr" : ""}${s.location ? " · " + esc(s.location) : ""}${s.cancelled ? ' · <span class="chip off">abgesagt</span>' : ""}</p>
     <div class="card flush">${block("Dabei", groups.yes)}${block("Abgesagt", groups.no)}${block("Keine Antwort", groups.open)}</div>
-    ${staff ? `<div class="btns"><button class="btn ghost" data-act="sessEdit" data-id="${esc(s.id)}">Termin bearbeiten</button></div>` : ""}
+    ${staff ? `<div class="btns"><button class="btn ghost" data-act="sessEdit" data-id="${esc(s.id)}">Termin bearbeiten</button>${s.cancelled ? `<button class="btn ghost" data-act="sessCancel" data-id="${esc(s.id)}" data-v="0">Findet doch statt</button>` : pauseOn(s.session_date) ? "" : `<button class="btn ghost" data-act="sessCancel" data-id="${esc(s.id)}" data-v="1">Training fällt aus</button>`}</div>` : ""}
     <div class="btns"><button class="btn ghost block" data-act="closeSheet">Schließen</button></div>`);
 }
 
@@ -1960,7 +2035,7 @@ function attPersonSheet(sid, u) {
     <p>Status: <b>${a && a.status === "yes" ? "zugesagt" : a && a.status === "no" ? "abgesagt" : "keine Antwort"}</b>${pr ? ` – ${esc(REASONS[pr.reason] || pr.reason)}${pr.note ? ": " + esc(pr.note) : ""}` : ""}</p>
     <div class="small muted" style="margin-bottom:6px">Markieren</div>
     <div class="seg">${[["", "Keine"], ["late", "Zu spät"], ["no_show", "Nicht erschienen"]].map(([v, l]) => `<button data-act="setMark" data-sid="${esc(sid)}" data-uid="${esc(u)}" data-v="${v}" aria-pressed="${(a && a.coach_mark || "") === v}">${l}</button>`).join("")}</div>
-    ${!s.cancelled ? `<div class="btns"><button class="btn ghost" data-act="respFor" data-sid="${esc(sid)}" data-uid="${esc(u)}" data-v="yes">Zusage eintragen</button><button class="btn ghost" data-act="respFor" data-sid="${esc(sid)}" data-uid="${esc(u)}" data-v="no">Absage eintragen</button></div>` : ""}
+    ${!sessOff(s) ? `<div class="btns"><button class="btn ghost" data-act="respFor" data-sid="${esc(sid)}" data-uid="${esc(u)}" data-v="yes">Zusage eintragen</button><button class="btn ghost" data-act="respFor" data-sid="${esc(sid)}" data-uid="${esc(u)}" data-v="no">Absage eintragen</button></div>` : ""}
     <h3 style="margin-top:18px;font-size:1.05rem">Verlauf</h3>
     ${hist.length ? `<ul class="hist">${hist.map(histLine).join("")}</ul>` : `<p class="small muted">Noch keine Reaktion.</p>`}
     <div class="btns"><button class="btn ghost block" data-act="sessOpen" data-id="${esc(sid)}">Zurück</button></div>`);
@@ -1986,7 +2061,7 @@ function youtubeId(url) {
 }
 async function exerciseSheet(id, prefillName) {
   const e = id ? S.exercises.find(x => x.id === id) : null;
-  const mayEdit = e && (isStaff() || e.created_by === S.me.id);
+  const mayEdit = e && isStaff();   // Übungen pflegen nur Trainer/Admins
   if (e && !exerciseSheet.edit) {
     let media = "";
     if (e.video_path) media = `<video controls playsinline preload="metadata" class="exvideo" id="exvideo"></video>`;
@@ -2020,26 +2095,34 @@ function itemSheet(text) {
   const ex = findExercise(text);
   if (ex) return exerciseSheet(ex.id);
   sheet(`<h3>${esc(text)}</h3><p class="muted small">Zu dieser Übung gibt es noch keine Erklärung in der Übungssammlung.</p>
-    <div class="btns"><button class="btn" data-act="exNew" data-name="${esc(text)}">Erklärung hinzufügen</button><button class="btn ghost" data-act="closeSheet">Schließen</button></div>`);
+    <div class="btns">${isStaff() ? `<button class="btn" data-act="exNew" data-name="${esc(text)}">Erklärung hinzufügen</button>` : ""}<button class="btn ghost" data-act="closeSheet">Schließen</button></div>`);
 }
 
 /* ───── Plan-Import ───── */
 function planFormatHtml() {
+  const R = (cls, label, a, b) => `<tr class="${cls}"><th>${label}</th><td>${a}</td><td>${b}</td></tr>`;
   return `<h3>So liest die App den Plan</h3><div class="helptext">
-  <p><b>Datei:</b> Excel (.xlsx). In Numbers über Ablage → Exportieren → Excel.</p>
-  <p><b>Ein Blatt pro Gruppe oder Programm</b>, z. B. Kurzsprint, Langsprint, Stab, Alternativplan … Der Blattname erscheint so in der App.</p>
-  <p><b>Wochentage:</b> Eine Zeile mit <i>Montag, Dienstag … Sonntag</i>, jeder Tag in einer eigenen Spalte. Die Zeile muss in den ersten 30 Zeilen stehen.</p>
-  <p><b>Über den Wochentagen</b> (optional): Saison in der ersten Zelle, z. B. „Wintersaison“, und „Ziel:“ mit dem Ziel daneben oder darunter.</p>
-  <p><b>Unter jedem Wochentag</b>, von oben nach unten in derselben Spalte:</p>
-  <ol><li>Ort und Uhrzeit oder Status, z. B. „LAA (17:25)“, „Pause“, „Regeneration“, „Optional“</li>
-  <li>Tagesthema, z. B. „Kraft Beine“</li>
-  <li>Übungen, jede in eine eigene Zelle. Die Belastung kommt in die Zelle <b>direkt darunter</b> (z. B. „3x5“, „max“, „Min 10“, „P: 6 min“, „Jungs 7,4-7,6s“). Mehrere Belastungszeilen untereinander sind möglich.</li>
-  <li>Eine Leerzeile beginnt einen neuen Block.</li></ol>
-  <p><b>Abkürzungen:</b> Ein Blatt mit „Abkürzungen“ im Namen, Spalte A die Abkürzung, Spalte B die Bedeutung. Es wird in die Übungssammlung übernommen.</p>
-  <p><b>Andere Blätter</b> ohne Wochentagszeile (z. B. „Übungen“, „Turnhalle“) erscheinen als Tabelle unter dem Plan.</p>
-  <p><b>Bitte nicht:</b> zwei Tage in einer Spalte, Übung und Belastung nebeneinander in zwei Spalten, Bilder oder Textfelder (werden ignoriert). Zusammengeführte Zellen gehen, der Text steht dann in der ersten Zelle.</p>
-  <p><b>Alternativpläne:</b> Beim Hochladen kann jedes Blatt einer Gruppe <i>und/oder einzelnen Personen</i> zugeordnet werden. Wer verletzt ist, bleibt in seiner Gruppe und sieht das Alternativblatt zuerst. Die Zuordnung lässt sich später im Plan unter „Zuordnung ändern“ anpassen.</p>
-  <p>Vor dem Speichern zeigt „Vorschau“ bei jedem Blatt, wie die App es gelesen hat.</p></div>`;
+  <p><a class="btn" href="vorlage/Wochenplan_Vorlage.xlsx" download>Vorlage herunterladen (.xlsx)</a></p>
+  <p class="small muted">Am einfachsten: Vorlage nehmen und nur die Inhalte ändern. Aufbau jeder Spalte von oben nach unten:</p>
+  <table class="fmt"><thead><tr><th></th><th>Montag</th><th>Dienstag</th></tr></thead><tbody>
+    ${R("r-info", "1 · Ort/Zeit", "<i>leer</i>", "LAA 17:25")}
+    ${R("r-title", "2 · Thema", "Kraft Beine", "Sprint")}
+    ${R("", "3 · Übung", "Rad", "Einlaufen")}
+    ${R("r-det", "Belastung", "Min 10", "800m")}
+    ${R("r-gap", "Leerzeile", "", "")}
+    ${R("", "Übung", "Kniebeuge", "Beschleunigung")}
+    ${R("r-det", "Belastung", "3x5", "5x20m")}
+    ${R("", "Übung", "Kastensprünge", "")}
+    ${R("r-det", "Belastung", "3x5", "")}</tbody></table>
+  <ul class="fmtlist">
+    <li><b>Ein Blatt pro Gruppe</b> oder Programm. Der Blattname erscheint in der App.</li>
+    <li><b>Zeile 1</b> unter dem Wochentag: Ort und Uhrzeit, oder <i>Pause</i>, <i>Regeneration</i>, <i>Optional</i>. Darf leer bleiben.</li>
+    <li><b>Zeile 2:</b> Tagesthema. Steht „Kraft“ darin, zeigt die App Supersätze: zwei Übungen ohne Leerzeile = ein Paar. „Rad“ oder „Einlaufen“ gilt als Aufwärmen.</li>
+    <li><b>Danach:</b> jede Übung in eine eigene Zelle, die Belastung <b>direkt darunter</b> (3x5, max, Min 10, P: 6 min …).</li>
+    <li><b>Leerzeile</b> = neuer Block. „Alternativ“ in einer eigenen Zeile wird als „oder“ angezeigt.</li>
+    <li><b>Abkürzungen:</b> Blatt „Abkürzungen“, Spalte A Kürzel, Spalte B Bedeutung.</li>
+  </ul>
+  <p class="small muted"><b>Nicht:</b> zwei Tage in einer Spalte, Übung und Belastung nebeneinander, Bilder. Vor dem Speichern zeigt „Vorschau“, wie die App jedes Blatt gelesen hat.</p></div>`;
 }
 let IMPORT = null;
 function defaultImportWeek() { const t = todayIso(), mon = mondayOf(t); return dowOf(t) >= 4 ? addDays(mon, 7) : mon; }
@@ -2060,16 +2143,17 @@ function importSheet() {
       ${p0.goal ? `<p class="small"><span class="muted">Ziel:</span> ${esc(p0.goal)}</p>` : ""}
       <div class="small muted" style="margin:10px 0 6px">Welches Blatt gehört zu welcher Trainingsgruppe?</div>
       ${r.plans.map((p, i) => {
-        const match = S.groups.find(g => norm(g.name) === norm(p.name));
+        const prev = (r.prev || []).find(x => norm(x.name) === norm(p.name));
+        const match = prev ? (prev.group_id ? S.groups.find(g => g.id === prev.group_id) : null) : S.groups.find(g => norm(g.name) === norm(p.name));
         const words = p.name.toLowerCase().split(/[^a-zäöüß]+/).filter(w => w.length >= 3);
-        const named = trainees().filter(u => words.includes(firstName(u.display_name).toLowerCase()));
-        const alt = /altern|reha|verletz|individ/i.test(p.name);
+        const named = trainees().filter(u => words.includes(firstName(u.display_name).toLowerCase()) || (prev && (prev.user_ids || []).includes(u.id)));
+        const alt = !!prev || /altern|reha|verletz|individ/i.test(p.name);
         const days = p.days.filter(d => d.items.length).length, items = p.days.reduce((n, d) => n + d.items.length, 0);
-        return `<div class="maprow"><span class="grow"><b>${esc(p.name)}</b><span class="small muted" style="display:block">${days} Tage, ${items} Übungen erkannt</span></span>
+        return `<div class="maprow"><span class="grow"><b>${esc(p.name)}</b><span class="small muted" style="display:block">${days} Tage, ${items} Übungen erkannt${prev ? " · Zuordnung wie bisher" : ""}</span></span>
           <select name="map${i}" aria-label="Trainingsgruppe für ${esc(p.name)}"><option value="">– keine Gruppe –</option>
           ${S.groups.map(g => `<option value="${esc(g.id)}" ${match && match.id === g.id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}
           <option value="__new" ${match || alt ? "" : "selected"}>+ Neue Gruppe „${esc(p.name)}“</option></select></div>
-          <details class="mapmore" ${named.length || alt ? "open" : ""}><summary class="small">Für einzelne Personen${named.length ? ` (${named.length} erkannt)` : ""}</summary>
+          <details class="mapmore" ${named.length || (alt && !prev) ? "open" : ""}><summary class="small">Für einzelne Personen${named.length ? ` (${named.length} ${prev ? "zugeordnet" : "erkannt"})` : ""}</summary>
             <div class="checks personlist">${trainees().sort(byName).map(u => `<label><input type="checkbox" name="u${i}" value="${esc(u.id)}" ${named.includes(u) ? "checked" : ""}> ${esc(u.display_name)} <span class="muted small">${esc(groupName(u.plan_group_id) || "")}${currentInjury(u.id) ? " · verletzt" : ""}</span></label>`).join("")}</div></details>
           <details class="mapmore"><summary class="small">Vorschau: so wird das Blatt gelesen</summary><div class="preview">${renderDays(p.days, mondayOf(todayIso()), false)}</div></details>`;
       }).join("")}
@@ -2149,12 +2233,17 @@ const actions = {
     await quiet(busy(el.parentElement, async () => { await S.be.respond(el.dataset.sid, el.dataset.uid, "yes"); await loadSessions(); render(); attPersonSheet(el.dataset.sid, el.dataset.uid); }));
   },
   sessNew() { sessionEditSheet({ session_date: todayIso(), title: "Training", location: ((S.settings.session_template || [])[0] || {}).location || "" }); },
+  async sessCancel(el) {
+    const on = el.dataset.v === "1";
+    if (on && !await ask("Training fällt aus?", "Zu- und Absagen werden gesperrt, das Training zählt nicht in die Statistik.", "Fällt aus")) return;
+    await quiet(busy(null, async () => { await S.be.saveSession({ id: el.dataset.id, cancelled: on }); closeSheet(); await reloadSessions(); toast(on ? "Training fällt aus" : "Training findet statt"); }));
+  },
   sessEdit(el) { sessionEditSheet(S.sessions.find(x => x.id === el.dataset.id)); },
   async sessDelete(el) {
     if (!await ask("Termin löschen?", "Der Termin und alle Zu-/Absagen dazu werden gelöscht. Wenn das Training nur ausfällt, setze lieber den Haken „Training fällt aus“.", "Löschen", true)) return;
     await quiet(busy(null, async () => { await S.be.deleteSession(el.dataset.id); await reloadSessions(); toast("Termin gelöscht"); }));
   },
-  showPast() { S.showPast = true; render(); },
+  showPast(el) { S.showPast = el.dataset.v !== "0"; render(); },
   tplAdd() { $("#tpl-more").insertAdjacentHTML("beforebegin", templateRow({ dow: 2, time: "", location: "" })); },
   tplRemove(el) { el.closest("[data-row]").remove(); },
   // Konto & Team
@@ -2252,6 +2341,7 @@ const actions = {
     setTimeout(() => location.reload(), 600);
   },
   demoStart() { LS.set("la_mode", "demo"); boot(); },
+  demoHintOk() { LS.set("la_demo_hint_seen", true); render(); },
   demoExit() { LS.del("la_mode"); S.be = null; S.user = null; S.me = null; boot(); },
   async demoReset() {
     if (!await ask("Demo zurücksetzen?", "Alle Änderungen im Demo-Modus gehen verloren.", "Zurücksetzen", true)) return;
@@ -2323,7 +2413,10 @@ const changes = {
     if (/\.numbers$/i.test(file.name)) return toast("Numbers-Dateien bitte als Excel exportieren: Ablage → Exportieren → Excel (.xlsx).", "error");
     try {
       const r = await XlsxPlan.parsePlanFile(await file.arrayBuffer());
-      IMPORT = Object.assign(r, { file: file.name, week: defaultImportWeek() });
+      IMPORT = Object.assign(r, { file: file.name, week: defaultImportWeek(), prev: [] });
+      // Zuordnungen des bisher gültigen Plans übernehmen (gleicher Blattname → gleiche Gruppe und Personen)
+      const prevPlan = planForWeek(IMPORT.week);
+      if (prevPlan) { try { IMPORT.prev = await sheetsOf(prevPlan); } catch { IMPORT.prev = []; } }
       importSheet();
     } catch (e) { toast(deErr(e), "error"); }
   },
@@ -2541,6 +2634,14 @@ document.addEventListener("change", e => {
   const el = e.target.closest("[data-change]");
   if (el && changes[el.dataset.change]) changes[el.dataset.change](el);
 });
+// Kommt die App aus dem Hintergrund zurück (am Handy oft nach Tagen), Daten neu laden –
+// sonst sieht man alte Pläne, Zuordnungen und Termine. Nicht, während ein Dialog offen ist.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !S.user || !S.me || !S.me.approved) return;
+  if (Date.now() - (S.loadedAt || 0) < 120000 || document.querySelector("dialog[open]")) return;
+  const scroll = window.scrollY;
+  refresh().then(() => window.scrollTo(0, scroll)).catch(() => {});
+});
 document.addEventListener("input", e => {
   const el = e.target.closest("[data-input]");
   if (el && inputs[el.dataset.input]) inputs[el.dataset.input](el);
@@ -2553,7 +2654,16 @@ document.addEventListener("submit", e => {
 });
 
 /* ───────────── Start ───────────── */
+// Direkter Demo-Link: …/la-trainingsgruppe/?demo (als Athlet), ?demo=trainer oder ?demo=admin
+function demoFromUrl() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has("demo")) return;
+  const who = { trainer: "u-trainer", admin: "u-admin" }[(q.get("demo") || "").toLowerCase()] || "u1";
+  LS.set("la_mode", "demo"); LS.set("la_demo_user", who); LS.del("la_demo_hint_seen");
+  history.replaceState(null, "", location.pathname + location.hash);
+}
 async function boot() {
+  demoFromUrl();
   applyPrefs();
   closeSheet();
   S.be = null; S.user = null; S.me = null; S.loadError = null;
