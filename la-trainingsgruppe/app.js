@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "19.11.2026 · 15";
+const VERSION = "19.11.2026 · 16";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -975,7 +975,7 @@ function renderDays(days, mon, live) {
         ${dayChips(d.info, sess)}</div>
       ${d.title ? `<div class="daytitle">${esc(d.title)}</div>` : ""}
       ${(d.titleDetails || []).length ? `<div class="small muted">${d.titleDetails.map(esc).join(" · ")}</div>` : ""}
-      ${d.items.length ? `<ul class="items">${itemGroups(d).map(g => `<li class="grp ${g.pair ? "pair" : ""} ${g.warmup ? "warmup" : ""}">${g.warmup ? '<span class="wutag">Aufwärmen</span>' : g.pair ? `<span class="wutag">${g.items.length === 2 ? "Supersatz" : g.items.length + "er-Block"}</span>` : ""}${g.items.map(it => itemHtml(it, live)).join("")}</li>`).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
+      ${d.items.length ? `<ul class="items">${itemGroups(d).map(g => `<li class="grp ${g.pair ? "pair" : ""} ${g.warmup ? "warmup" : ""}">${g.warmup ? '<span class="wutag">Aufwärmen</span>' : ""}${g.items.map(it => itemHtml(it, live)).join("")}</li>`).join("")}</ul>` : empty ? `<div class="small muted">Frei</div>` : ""}
     </section>`;
   }).join("");
 }
