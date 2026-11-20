@@ -17,13 +17,13 @@ create table if not exists public.feedback (
 );
 create index if not exists feedback_created_idx on public.feedback (created_at desc);
 
--- Status und Antwort dürfen nur Trainer und Admins ändern; Text nur die Person selbst
+-- Status und Antwort darf nur ein Admin ändern; Text nur die Person selbst
 create or replace function public.feedback_guard() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is null then return new; end if;
-  if not public.is_staff() and (new.status <> old.status or new.admin_note <> old.admin_note) then
-    raise exception 'Nur Trainer und Admins können den Status ändern';
+  if not public.is_admin() and (new.status <> old.status or new.admin_note <> old.admin_note) then
+    raise exception 'Nur Admins können den Status ändern';
   end if;
   if old.user_id <> auth.uid() and (new.message <> old.message or new.category <> old.category) then
     raise exception 'Nur die Person selbst kann ihr Feedback ändern';
@@ -38,17 +38,17 @@ alter table public.feedback enable row level security;
 revoke all on public.feedback from anon;
 grant select, insert, update, delete on public.feedback to authenticated;
 
--- Eigenes Feedback sehen alle; alles sehen Trainer und Admins
+-- Eigenes Feedback sehen alle; alles sehen nur Admins
 drop policy if exists "feedback: lesen" on public.feedback;
 create policy "feedback: lesen" on public.feedback for select to authenticated
-  using (public.is_staff() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_admin() or (public.is_member() and user_id = auth.uid()));
 drop policy if exists "feedback: schreiben" on public.feedback;
 create policy "feedback: schreiben" on public.feedback for insert to authenticated
-  with check (public.is_member() and (user_id = auth.uid() or public.is_staff()));
+  with check (public.is_member() and (user_id = auth.uid() or public.is_admin()));
 drop policy if exists "feedback: ändern" on public.feedback;
 create policy "feedback: ändern" on public.feedback for update to authenticated
-  using (public.is_staff() or (public.is_member() and user_id = auth.uid()))
-  with check (public.is_staff() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_admin() or (public.is_member() and user_id = auth.uid()))
+  with check (public.is_admin() or (public.is_member() and user_id = auth.uid()));
 drop policy if exists "feedback: löschen" on public.feedback;
 create policy "feedback: löschen" on public.feedback for delete to authenticated
-  using (public.is_staff() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_admin() or (public.is_member() and user_id = auth.uid()));

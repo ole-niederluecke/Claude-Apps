@@ -14,16 +14,16 @@ revoke all on public.feedback_votes from anon;
 grant select, insert, delete on public.feedback_votes to authenticated;
 drop policy if exists "feedback_votes: lesen" on public.feedback_votes;
 create policy "feedback_votes: lesen" on public.feedback_votes for select to authenticated
-  using (public.is_staff() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_admin() or (public.is_member() and user_id = auth.uid()));
 drop policy if exists "feedback_votes: setzen" on public.feedback_votes;
 create policy "feedback_votes: setzen" on public.feedback_votes for insert to authenticated
-  with check (public.is_member() and (user_id = auth.uid() or public.is_staff()));
+  with check (public.is_member() and (user_id = auth.uid() or public.is_admin()));
 drop policy if exists "feedback_votes: entfernen" on public.feedback_votes;
 create policy "feedback_votes: entfernen" on public.feedback_votes for delete to authenticated
-  using (public.is_staff() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_admin() or (public.is_member() and user_id = auth.uid()));
 
 -- Pinnwand: alle Rückmeldungen ohne Absender und ohne Gerätedaten.
--- Die Tabelle feedback selbst bleibt geschützt (Namen und Geräte sehen weiter nur Trainer und Admins).
+-- Die Tabelle feedback selbst bleibt geschützt (Namen und Geräte sieht weiter nur der Admin).
 create or replace function public.feedback_board()
 returns table (id uuid, category text, message text, context text, status text, admin_note text,
                created_at timestamptz, votes int, voted boolean, mine boolean)

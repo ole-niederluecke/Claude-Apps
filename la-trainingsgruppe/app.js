@@ -1,5 +1,5 @@
 "use strict";
-const VERSION = "20.11.2026 · 1";
+const VERSION = "20.11.2026 · 2";
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -290,8 +290,8 @@ const DEMO_RULES = (() => {
     calendar_entries: { read: "member", defaults: { end_date: null, location: "", note: "", keep: false }, canWrite: staffOnly },
     competition_entries: { read: "staffSelf", defaults: { status: "angefragt" }, canWrite: (n, o, c) => c.staff },
     attendance_weekly: { read: "staffSelf", defaults: { reasons: {} }, canWrite: () => false },
-    feedback: { read: "staffSelf", defaults: { category: "idee", context: "", app_version: "", device: "", status: "neu", admin_note: "" },
-      canWrite: (n, o, c) => c.staff || (n.user_id === c.me && (!o || (o.status === n.status && o.admin_note === n.admin_note))) },
+    feedback: { read: "adminSelf", defaults: { category: "idee", context: "", app_version: "", device: "", status: "neu", admin_note: "" },
+      canWrite: (n, o, c) => c.admin || (n.user_id === c.me && (!o || (o.status === n.status && o.admin_note === n.admin_note))) },
     competition_results: { read: "member", defaults: { entry_id: null, place: "", wind: "", note: "", better: "lower", entered_by: null },
       canWrite: (n, o, c) => c.staff || (n.user_id === c.me && (!o || o.user_id === c.me)) }
   };
@@ -789,7 +789,7 @@ function viewTop() {
     <button class="acctbtn" data-act="account" aria-label="Konto: ${esc(S.me.display_name)}"><span class="avatar ${role()}">${esc(initials(S.me.display_name))}</span></button></div></header>`;
 }
 function viewNav() {
-  const n = isStaff() ? pending().length + S.feedback.filter(f => f.status === "neu").length : 0;
+  const n = (isStaff() ? pending().length : 0) + (isAdmin() ? S.feedback.filter(f => f.status === "neu").length : 0);
   const ns = nextSession(), myOpen = (ns && trainsP(S.me) && weekOpen(mondayOf(ns.session_date)) && !attOf(ns.id, S.me.id)?.status) || pendingInvites().length ? 1 : 0;
   const b = (id, label, badge) => `<button data-act="tab" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ""}>${ICON[id]}${label}${badge ? `<span class="badge">${badge}</span>` : ""}</button>`;
   return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Trainingsplan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("leistung", "Leistung")}${b("settings", "Mehr", n)}</div></nav>`;
@@ -1079,9 +1079,9 @@ function viewTraining() {
 /* ───── Mehr: Team + Einstellungen ───── */
 function viewMore() {
   const n = isStaff() ? pending().length : 0, nf = S.feedback.filter(f => f.status === "neu").length;
-  if ((S.moreView === "feedback" || S.moreView === "help") && !isStaff()) S.moreView = "team";
+  if ((S.moreView === "feedback" && !isAdmin()) || (S.moreView === "help" && !isStaff())) S.moreView = "team";
   return `<div class="seg" style="margin-bottom:14px"><button data-act="moreView" data-v="team" aria-pressed="${S.moreView === "team"}">Team${n ? ` (${n})` : ""}</button>
-    ${isStaff() ? `<button data-act="moreView" data-v="feedback" aria-pressed="${S.moreView === "feedback"}">Feedback${nf ? ` (${nf})` : ""}</button>` : ""}
+    ${isAdmin() ? `<button data-act="moreView" data-v="feedback" aria-pressed="${S.moreView === "feedback"}">Feedback${nf ? ` (${nf})` : ""}</button>` : ""}
     <button data-act="moreView" data-v="settings" aria-pressed="${S.moreView === "settings" || S.moreView === "help"}">Einstellungen</button></div>`
     + (S.moreView === "settings" ? viewSettings() : S.moreView === "feedback" ? viewFeedbackAdmin() : S.moreView === "help" ? viewAdminHelp() : viewTeam());
 }
@@ -1098,8 +1098,8 @@ function viewAdminHelp() {
     <li><b>Tests und Wettkämpfe:</b> Werte unter Leistung → Eintragen. Wettkämpfe unter Termine → Saison &amp; Wettkämpfe anlegen und die Leute auswählen, die starten sollen.</li></ol>
   <h4>Rollen</h4><div class="tablewrap"><table class="grid roles"><tr><th></th><th>Athlet</th><th>Trainer</th><th>Admin</th></tr>
     ${R("Wochenplan ansehen, zu-/absagen, eigene Werte und Beteiligung", 1, 1, 1)}${R("Wettkampfergebnisse eintragen, Feedback schicken", 1, 1, 1)}
-    ${R("Plan hochladen, Übungen, Termine, Saisonpause, Tests, Normen, Verletzungen", 0, 1, 1)}${R("Absagegründe, Verlauf, Statistik, Feedback beantworten", 0, 1, 1)}
-    ${R("Freischalten, Gruppen, Rollen Athlet/Trainer, Konten löschen, Teamname", 0, 1, 1)}${R("Admin-Rechte vergeben, Admin-Profile ändern, Backup", 0, 0, 1)}</table></div>
+    ${R("Plan hochladen, Übungen, Termine, Saisonpause, Tests, Normen, Verletzungen", 0, 1, 1)}${R("Absagegründe, Verlauf, Statistik", 0, 1, 1)}
+    ${R("Freischalten, Gruppen, Rollen Athlet/Trainer, Konten löschen, Teamname", 0, 1, 1)}${R("Admin-Rechte vergeben, Admin-Profile ändern, Backup, Feedback zur App", 0, 0, 1)}</table></div>
   <h4>Admins sind für Athleten unsichtbar</h4><p>Der Admin macht nur die Verwaltung. Athleten sehen Admins deshalb nicht im Team, und Admins zählen nicht in Termine oder Statistik. Trainer und andere Admins sehen sie weiter.</p>
     <p><b>Admin, der selbst trainiert:</b> Am einfachsten ein zweites Konto als Athlet anlegen. Supabase erlaubt jede E-Mail-Adresse nur einmal. Bei Gmail kommt <code>name+athlet@gmail.com</code> aber im selben Postfach an wie <code>name@gmail.com</code>, das Passwort darf gleich sein. Das neue Konto registrieren und mit dem Admin-Konto unter Mehr → Team freischalten. Alternativ: In „Mein Konto“ den Haken „Ich trainiere selbst mit“ setzen. Dann sehen dich die Athleten aber wieder.</p>
   <h4>Neue Mitglieder</h4><p>Wer den Link hat, kann sich registrieren, sieht aber nichts, bis ein Trainer oder Admin ihn unter <b>Mehr → Team</b> freischaltet. Schalte nur Leute frei, die du kennst. Trainer bekommen ihre Rolle im Profil (Name antippen → Rolle).</p>
@@ -1108,13 +1108,13 @@ function viewAdminHelp() {
   <h4>Alte Trainings</h4><p>Nach 14 Tagen bleiben von einem Training nur die Zahlen für die Statistik. Einzelne Absagen, Gründe und Freitext werden gelöscht.</p>
   <h4>Wettkämpfe melden</h4><p>Beim Anlegen eines Wettkampfs wählt der Trainer aus, wen er melden möchte. Nur diese Personen sehen ihn und sagen auf der Startseite zu oder ab. Teilnehmer und Antworten lassen sich danach jederzeit ändern.</p>
   <h4>Übungsvideos</h4><p>Am besten auf YouTube als <b>„nicht gelistet“</b> hochladen und den Link bei der Übung eintragen. Das Video läuft direkt in der App und braucht keinen Speicher. „Privat“ geht nicht, private Videos sieht nur der Besitzer.</p>
-  <h4>Feedback</h4><p>Unter Mehr → Feedback siehst du alle Rückmeldungen mit Namen. „Antworten“ zeigt deine Antwort allen auf der Pinnwand, „Erledigt“ schiebt sie nach unten.</p>
   <h3 style="margin-top:22px">Technik (macht der Admin)</h3>
   <h4>Datenmenge</h4><p>Kostenlos sind 500 MB Datenbank und 1 GB für Videos. Die Gruppe braucht nur wenige MB pro Jahr, Platz kosten nur hochgeladene Videos.</p>
   <h4>Backup</h4><p>Supabase sichert in der kostenlosen Stufe nicht automatisch. Lade als Admin regelmäßig unter Einstellungen → Backup eine Sicherung herunter. Videos sind nicht enthalten.</p>
   <h4>Supabase pausiert</h4><p>Kostenlose Supabase-Projekte werden nach 7 Tagen <b>ohne jeden Zugriff</b> angehalten, um Rechenleistung zu sparen. Die App zeigt dann nur noch einen Verbindungsfehler, die Daten bleiben aber erhalten. Wieder starten: im Supabase-Dashboard beim Projekt auf <b>Restore</b> klicken (dauert ein paar Minuten).</p>
     <p>Damit es gar nicht so weit kommt, ruft eine kleine GitHub-Aktion zweimal pro Woche die Datenbank kurz auf (Ordner <code>.github/workflows</code>). Kostenlos, liest keine Daten. Unter GitHub → <b>Actions</b> siehst du, ob sie läuft. GitHub schaltet solche geplanten Aktionen ab, wenn im Repository 60 Tage lang nichts passiert. Dann dort auf „Enable workflow“ klicken.</p>
   <h4>Datenschutz</h4><p>Im öffentlichen GitHub-Repository liegt nur der Programmcode. Alle Daten liegen in Supabase und sind nur mit freigeschaltetem Konto erreichbar. Der <b>secret- bzw. service_role-Key</b> umgeht alle Regeln und gehört nie ins Repo, in die App oder in einen Chat. Verletzungen sehen nur Trainer, Admins und die Person selbst.</p>
+  <h4>Feedback zur App</h4><p>Nur Admins sehen unter Mehr → Feedback alle Rückmeldungen mit Namen. „Antworten“ zeigt die Antwort allen auf der Pinnwand, „Erledigt“ schiebt sie nach unten.</p>
   <h4>Updates</h4><p>Bringt ein Update eine geänderte SQL-Datei mit, diese <b>vor</b> dem Mergen komplett im Supabase SQL Editor ausführen. Sie darf beliebig oft laufen, vorhandene Daten bleiben erhalten. Danach in der App unter Einstellungen → Version → Aktualisieren.</p>
   </div>
   <div class="card helptext">${planFormatHtml()}</div>`;
@@ -1171,7 +1171,7 @@ function viewFeedbackAdmin() {
 function feedbackSheet() {
   S.fbDraft = "";
   const open = (S.fbBoard || []).filter(b => b.status !== "erledigt").length;
-  sheet(`<h3>Feedback zur Beta</h3><p class="small muted">Was funktioniert nicht, was fehlt, was ist umständlich? Unten siehst du, was schon gemeldet wurde – ohne Namen. Wer etwas geschickt hat, sehen nur Trainer und Admins.</p>
+  sheet(`<h3>Feedback zur Beta</h3><p class="small muted">Was funktioniert nicht, was fehlt, was ist umständlich? Unten siehst du, was schon gemeldet wurde – ohne Namen. Wer etwas geschickt hat, sieht nur der Admin.</p>
     <form data-form="feedback">
       <div class="seg" role="radiogroup" style="margin-bottom:12px">${Object.entries(FB_CAT).map(([v, l], i) => `<label class="segopt"><input type="radio" name="cat" value="${v}" ${i === 0 ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
       <label class="f"><span>Nachricht</span><textarea name="msg" rows="5" maxlength="2000" required data-input="fbSimilar" placeholder="z. B. Beim Absagen am Handy springt die Seite nach oben."></textarea>
@@ -1251,7 +1251,12 @@ function viewSettings() {
       <h2>Trainingsanmeldung</h2><div class="card">
       <p class="small muted">Athleten können erst zu- oder absagen, wenn die Woche geöffnet ist. Öffnen geht jederzeit unter <b>Termine</b>.</p>
       <form data-form="regauto">
-        ${[["manual", "Nur von Hand öffnen"], ["7", "Automatisch am Sonntag vor der Woche"], ["1", "Automatisch am Montag der Woche"]].map(([v, l]) => `<label class="opt"><input type="radio" name="mode" value="${v}" ${String((s.registration_auto || {}).dow || "manual") === v ? "checked" : ""}><span><b>${l}</b></span></label>`).join("")}
+        ${(() => { const dow = Number((s.registration_auto || {}).dow) || 0;
+          // 2–7 = Dienstag–Sonntag vor der Woche; 1 (Montag der Woche) bleibt nur für alte Einstellungen wählbar
+          const days = [[5, "Freitag"], [6, "Samstag"], [7, "Sonntag"], [4, "Donnerstag"], [3, "Mittwoch"], [2, "Dienstag"]];
+          return `<label class="opt"><input type="radio" name="mode" value="manual" ${dow ? "" : "checked"}><span><b>Nur von Hand öffnen</b></span></label>
+          <label class="opt"><input type="radio" name="mode" value="auto" ${dow ? "checked" : ""}><span><b>Automatisch in der Woche davor</b><span class="small muted">Wochentag und Uhrzeit wählst du unten.</span></span></label>
+          <label class="f"><span>Wochentag (vor der Trainingswoche)</span><select name="dow">${days.map(([v, l]) => `<option value="${v}" ${dow === v || (!dow && v === 7) ? "selected" : ""}>${l} vor der Woche</option>`).join("")}${dow === 1 ? `<option value="1" selected>Montag der Woche selbst</option>` : ""}</select></label>`; })()}
         <label class="f"><span>Uhrzeit für automatisches Öffnen</span><input type="time" name="time" value="${esc((s.registration_auto || {}).time || "18:00")}"></label>
         <button class="btn sm ghost">Speichern</button></form></div>
       <h2>Feste Trainingstage</h2><div class="card">
@@ -1991,7 +1996,7 @@ function memberSheet(id) {
       <label class="f"><span>Name</span><input type="text" name="name" required maxlength="60" value="${esc(p.display_name)}"></label>
       ${staffEdit ? `<label class="f"><span>Trainingsgruppe</span><select name="group">${groupOpts}</select><div class="hint">Bestimmt, welches Blatt im Wochenplan zuerst geöffnet wird.</div></label>` : ""}
       ${staffEdit && roles.includes(p.role) ? `<label class="f"><span>Rolle</span><select name="role">${roles.map(r => `<option value="${r}" ${r === p.role ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select>
-        <div class="hint">Trainer können fast alles: freischalten, Rollen Athlet/Trainer, Pläne, Termine, Absagegründe, Feedback. Admins zusätzlich: Admin-Rechte vergeben und Backup. Admins sind für Athleten unsichtbar.</div></label>` : ""}
+        <div class="hint">Trainer können fast alles: freischalten, Rollen Athlet/Trainer, Pläne, Termine, Absagegründe. Admins zusätzlich: Admin-Rechte vergeben, Backup und Feedback zur App. Admins sind für Athleten unsichtbar.</div></label>` : ""}
       ${staffEdit && p.role !== "athlete" ? `<label class="opt"><input type="checkbox" name="trains" ${trainsP(p) ? "checked" : ""}><span><b>Trainiert selbst mit</b><span class="small muted">Zu-/Absagen, Tests und Statistik wie bei Athleten.</span></span></label>` : ""}
       ${staffEdit && !self ? `<label class="opt"><input type="checkbox" name="approved" ${p.approved ? "checked" : ""}><span><b>Zugang aktiv</b><span class="small muted">Ohne Haken kann sich die Person zwar anmelden, sieht aber nichts.</span></span></label>` : ""}
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div>
@@ -2568,7 +2573,7 @@ const forms = {
   },
   async regauto(f) {
     const mode = (f.querySelector("[name=mode]:checked") || {}).value;
-    const v = mode === "manual" ? null : { dow: Number(mode), time: f.time.value || "18:00" };
+    const v = mode === "manual" ? null : { dow: Number(f.dow.value) || 7, time: f.time.value || "18:00" };
     S.settings = await S.be.updateSettings({ registration_auto: v }); render(); toast("Gespeichert");
   },
   async teamname(f) { S.settings = await S.be.updateSettings({ team_name: f.name.value.trim() }); render(); toast("Gespeichert"); },
