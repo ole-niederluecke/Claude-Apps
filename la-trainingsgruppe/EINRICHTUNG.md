@@ -1,6 +1,6 @@
 # LT DSHS Köln – Einrichtung
 
-Kurzanleitung für die einmalige Einrichtung. Das ausführliche Handbuch (Rollen, Abläufe, Datenschutz) steht in der App unter **Mehr → Einstellungen → Admin → Admin-Handbuch** und ist nur für Admins sichtbar.
+Kurzanleitung für die einmalige Einrichtung. Das ausführliche Handbuch (Rollen, Abläufe, Datenschutz) steht in der App unter **Mehr → Einstellungen → Verwaltung → Handbuch** und ist für Trainer und Admins sichtbar.
 
 ## 1. Datenbank (Supabase)
 Im Supabase-Projekt links **SQL Editor → New query** öffnen, den kompletten Inhalt von `supabase/alles_in_einem.sql` einfügen und auf **Run** klicken. Fertig.
@@ -19,6 +19,8 @@ In `config.js` stehen die Project URL und der publishable/anon Key. Beide sind �
 
 ## 4. Erstes Konto
 Das erste registrierte Konto wird automatisch Admin. Danach registrieren sich Trainer und Athleten selbst und werden in der App unter **Mehr → Team** freigeschaltet.
+
+Admins sind für Athleten unsichtbar und zählen nicht in der Statistik. Wer als Admin auch selbst trainiert, legt ein zweites Konto als Athlet an. Jede E-Mail-Adresse geht nur einmal, bei Gmail landet `name+athlet@gmail.com` aber im selben Postfach wie `name@gmail.com`. Das Passwort darf gleich sein. Das neue Konto dann mit dem Admin-Konto freischalten.
 
 ## Demo für andere
 Wer die App erst ausprobieren soll, bekommt diesen Link. Er öffnet sofort die Demo mit ausgedachten Daten, ohne Konto:

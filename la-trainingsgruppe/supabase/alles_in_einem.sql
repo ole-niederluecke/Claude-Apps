@@ -48,6 +48,8 @@ create table if not exists public.profiles (
   plan_group_id uuid references public.plan_groups (id) on delete set null,
   created_at    timestamptz not null default now()
 );
+-- trainiert selbst mit (null = Standard: Athleten ja, Trainer/Admins nein); Details in Teil 4
+alter table public.profiles add column if not exists trains boolean;
 
 -- ───────────────────────── Hilfsfunktionen ─────────────────────────
 -- security definer: lesen die eigene Rolle, ohne an RLS hängen zu bleiben.
@@ -116,12 +118,20 @@ begin
      and (new.display_name, new.role, new.approved) is not distinct from (old.display_name, old.role, old.approved) then
     return new;
   end if;
-  if my <> 'admin' then
-    if new.role <> old.role then
-      raise exception 'Nur Admins dürfen Rollen ändern';
+  -- Trainer dürfen fast alles wie Admins; nur Admin-Rechte und Admin-Profile bleiben bei den Admins
+  if my = 'trainer' then
+    if (new.role = 'admin') <> (old.role = 'admin') then
+      raise exception 'Nur Admins dürfen Admin-Rechte vergeben oder entziehen';
     end if;
-    if old.id <> me and old.role <> 'athlete' then
-      raise exception 'Nur Admins dürfen Trainer- und Admin-Profile ändern';
+    if old.id <> me and old.role = 'admin' then
+      raise exception 'Nur Admins dürfen Admin-Profile ändern';
+    end if;
+  elsif my <> 'admin' then
+    if new.role <> old.role then
+      raise exception 'Nur Trainer und Admins dürfen Rollen ändern';
+    end if;
+    if old.id <> me then
+      raise exception 'Du kannst nur dein eigenes Profil ändern';
     end if;
   end if;
   if my not in ('admin', 'trainer') then
@@ -144,8 +154,8 @@ create trigger profiles_guard
 create or replace function public.team_settings_guard() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if auth.uid() is not null and new.team_name <> old.team_name and not public.is_admin() then
-    raise exception 'Nur Admins dürfen den Teamnamen ändern';
+  if auth.uid() is not null and new.team_name <> old.team_name and not public.is_staff() then
+    raise exception 'Nur Trainer und Admins dürfen den Teamnamen ändern';
   end if;
   new.updated_at := now();
   new.updated_by := auth.uid();
@@ -188,11 +198,13 @@ drop policy if exists "gruppen: Trainer/Admin löschen" on public.plan_groups;
 create policy "gruppen: Trainer/Admin löschen" on public.plan_groups
   for delete to authenticated using (public.is_staff());
 
--- Eigenes Profil immer; freigeschaltete Profile für Mitglieder; alle für Trainer/Admin
+-- Eigenes Profil immer; alle für Trainer/Admin; für Athleten die freigeschalteten Profile –
+-- aber keine Admins (die machen nur die Verwaltung), außer ein Admin trainiert selbst mit
 drop policy if exists "profile: lesen" on public.profiles;
 create policy "profile: lesen" on public.profiles
   for select to authenticated
-  using (id = auth.uid() or public.is_staff() or (approved and public.is_member()));
+  using (id = auth.uid() or public.is_staff()
+         or (approved and public.is_member() and (role <> 'admin' or coalesce(trains, false))));
 -- Feinere Regeln (wer was ändern darf) stehen in profiles_guard
 drop policy if exists "profile: ändern" on public.profiles;
 create policy "profile: ändern" on public.profiles
@@ -208,7 +220,7 @@ language sql stable security definer set search_path = public, auth as $$
   select u.id, u.email::text from auth.users u where public.is_staff()
 $$;
 
--- Konto löschen: eigenes Konto, als Admin jedes, als Trainer nicht freigeschaltete Athleten
+-- Konto löschen: eigenes Konto, als Admin jedes, als Trainer alle außer Admins
 create or replace function public.delete_user(target uuid) returns void
 language plpgsql security definer set search_path = public, auth as $$
 declare
@@ -222,7 +234,7 @@ begin
   if target <> auth.uid() then
     if my = 'admin' then
       null;
-    elsif my = 'trainer' and t.role = 'athlete' and not t.approved then
+    elsif my = 'trainer' and t.role <> 'admin' then
       null;
     else
       raise exception 'Keine Berechtigung, dieses Konto zu löschen';
@@ -919,13 +931,13 @@ create table if not exists public.feedback (
 );
 create index if not exists feedback_created_idx on public.feedback (created_at desc);
 
--- Status und Antwort darf nur ein Admin ändern; Text nur die Person selbst
+-- Status und Antwort dürfen nur Trainer und Admins ändern; Text nur die Person selbst
 create or replace function public.feedback_guard() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is null then return new; end if;
-  if not public.is_admin() and (new.status <> old.status or new.admin_note <> old.admin_note) then
-    raise exception 'Nur Admins können den Status ändern';
+  if not public.is_staff() and (new.status <> old.status or new.admin_note <> old.admin_note) then
+    raise exception 'Nur Trainer und Admins können den Status ändern';
   end if;
   if old.user_id <> auth.uid() and (new.message <> old.message or new.category <> old.category) then
     raise exception 'Nur die Person selbst kann ihr Feedback ändern';
@@ -940,20 +952,20 @@ alter table public.feedback enable row level security;
 revoke all on public.feedback from anon;
 grant select, insert, update, delete on public.feedback to authenticated;
 
--- Eigenes Feedback sehen alle; alles sehen nur Admins
+-- Eigenes Feedback sehen alle; alles sehen Trainer und Admins
 drop policy if exists "feedback: lesen" on public.feedback;
 create policy "feedback: lesen" on public.feedback for select to authenticated
-  using (public.is_admin() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_staff() or (public.is_member() and user_id = auth.uid()));
 drop policy if exists "feedback: schreiben" on public.feedback;
 create policy "feedback: schreiben" on public.feedback for insert to authenticated
-  with check (public.is_member() and (user_id = auth.uid() or public.is_admin()));
+  with check (public.is_member() and (user_id = auth.uid() or public.is_staff()));
 drop policy if exists "feedback: ändern" on public.feedback;
 create policy "feedback: ändern" on public.feedback for update to authenticated
-  using (public.is_admin() or (public.is_member() and user_id = auth.uid()))
-  with check (public.is_admin() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_staff() or (public.is_member() and user_id = auth.uid()))
+  with check (public.is_staff() or (public.is_member() and user_id = auth.uid()));
 drop policy if exists "feedback: löschen" on public.feedback;
 create policy "feedback: löschen" on public.feedback for delete to authenticated
-  using (public.is_admin() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_staff() or (public.is_member() and user_id = auth.uid()));
 
 
 -- ═════════════════════════ 06_planzuordnung_statistik.sql ═════════════════════════
@@ -1172,16 +1184,16 @@ revoke all on public.feedback_votes from anon;
 grant select, insert, delete on public.feedback_votes to authenticated;
 drop policy if exists "feedback_votes: lesen" on public.feedback_votes;
 create policy "feedback_votes: lesen" on public.feedback_votes for select to authenticated
-  using (public.is_admin() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_staff() or (public.is_member() and user_id = auth.uid()));
 drop policy if exists "feedback_votes: setzen" on public.feedback_votes;
 create policy "feedback_votes: setzen" on public.feedback_votes for insert to authenticated
-  with check (public.is_member() and (user_id = auth.uid() or public.is_admin()));
+  with check (public.is_member() and (user_id = auth.uid() or public.is_staff()));
 drop policy if exists "feedback_votes: entfernen" on public.feedback_votes;
 create policy "feedback_votes: entfernen" on public.feedback_votes for delete to authenticated
-  using (public.is_admin() or (public.is_member() and user_id = auth.uid()));
+  using (public.is_staff() or (public.is_member() and user_id = auth.uid()));
 
 -- Pinnwand: alle Rückmeldungen ohne Absender und ohne Gerätedaten.
--- Die Tabelle feedback selbst bleibt geschützt (Namen und Geräte sieht weiter nur der Admin).
+-- Die Tabelle feedback selbst bleibt geschützt (Namen und Geräte sehen weiter nur Trainer und Admins).
 create or replace function public.feedback_board()
 returns table (id uuid, category text, message text, context text, status text, admin_note text,
                created_at timestamptz, votes int, voted boolean, mine boolean)
