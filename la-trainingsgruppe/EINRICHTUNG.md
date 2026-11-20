@@ -3,9 +3,9 @@
 Kurzanleitung für die einmalige Einrichtung. Das ausführliche Handbuch (Rollen, Abläufe, Datenschutz) steht in der App unter **Mehr → Einstellungen → Verwaltung → Handbuch** und ist für Trainer und Admins sichtbar.
 
 ## 1. Datenbank (Supabase)
-Im Supabase-Projekt links **SQL Editor → New query** öffnen, den kompletten Inhalt von `supabase/alles_in_einem.sql` einfügen und auf **Run** klicken. Fertig.
+Im Supabase-Projekt links **SQL Editor → New query** öffnen, den kompletten Inhalt von `supabase/alles_in_einem_vNN.sql` (aktuell `alles_in_einem_v10.sql`) einfügen und auf **Run** klicken. Fertig.
 
-Das gilt auch für **jedes Update**: Kommt eine neue Version, einfach wieder `alles_in_einem.sql` komplett ausführen, und zwar **vor** dem Mergen. Die Datei darf beliebig oft laufen. Vorhandene Daten, eigene Tests und Normen bleiben erhalten.
+Das gilt auch für **jedes Update**: Kommt eine neue Version, einfach wieder die Datei `alles_in_einem_vNN.sql` mit der neuen Nummer komplett ausführen, und zwar **vor** dem Mergen. Die Datei darf beliebig oft laufen. Vorhandene Daten, eigene Tests und Normen bleiben erhalten.
 
 Die Einzeldateien `01_…sql` bis `09_…sql` enthalten dasselbe, nur aufgeteilt nach Themen. Man braucht sie nicht einzeln auszuführen.
 

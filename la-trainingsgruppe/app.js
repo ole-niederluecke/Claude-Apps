@@ -1,5 +1,7 @@
 "use strict";
-const VERSION = "20.11.2026 · 2";
+const VERSION = "20.11.2026 · 3";
+// Stand der Datenbank, den diese App-Version braucht (= Nummer in supabase/alles_in_einem_vNN.sql)
+const REQUIRED_SQL = 10;
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -183,6 +185,8 @@ function makeSupabaseBackend(url, key) {
     },
     async answerInvite(entryId, status) { ok(await sb.rpc("answer_competition", { p_entry: entryId, p_status: status })); },
     async feedbackBoard() { return ok(await sb.rpc("feedback_board")) || []; },
+    // vor Stand 10 gab es die Funktion noch nicht → 0
+    async sqlVersion() { const r = await sb.rpc("sql_version"); return r.error ? 0 : Number(r.data) || 0; },
     async voteFeedback(id, on) {
       if (on) ok(await T("feedback_votes").upsert({ feedback_id: id, user_id: S.me.id }, { onConflict: "feedback_id,user_id", ignoreDuplicates: true }));
       else ok(await T("feedback_votes").delete().eq("feedback_id", id).eq("user_id", S.me.id));
@@ -388,6 +392,7 @@ function makeDemoBackend() {
   const now = () => new Date().toISOString();
   return {
     kind: "demo", host: "Demo auf diesem Gerät",
+    async sqlVersion() { return REQUIRED_SQL; },
     users: () => db.profiles.slice().sort(byName),
     switchUser(id) { LS.set("la_demo_user", id); },
     reset() { db = demoPerformance(demoSeed()); save(); LS.set("la_demo_user", "u-admin"); },
@@ -655,6 +660,7 @@ async function loadAll() {
   S.sheetCache = {}; S.sheetChoice = {}; S.loadedAt = Date.now();
   S.emails = {};
   if (isStaff()) (await S.be.emails()).forEach(r => S.emails[r.id] = r.email);
+  S.sqlVersion = isAdmin() ? await S.be.sqlVersion().catch(() => 0) : null;
   await Promise.all([loadSessions(), reloadPerf()]);
   S.stats = { loaded: false };
   const plan = planForWeek(mondayOf(todayIso()));
@@ -789,7 +795,7 @@ function viewTop() {
     <button class="acctbtn" data-act="account" aria-label="Konto: ${esc(S.me.display_name)}"><span class="avatar ${role()}">${esc(initials(S.me.display_name))}</span></button></div></header>`;
 }
 function viewNav() {
-  const n = (isStaff() ? pending().length : 0) + (isAdmin() ? S.feedback.filter(f => f.status === "neu").length : 0);
+  const n = (isStaff() ? pending().length : 0) + (isAdmin() ? S.feedback.filter(f => f.status === "neu").length : 0) + (sqlOutdated() ? 1 : 0);
   const ns = nextSession(), myOpen = (ns && trainsP(S.me) && weekOpen(mondayOf(ns.session_date)) && !attOf(ns.id, S.me.id)?.status) || pendingInvites().length ? 1 : 0;
   const b = (id, label, badge) => `<button data-act="tab" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ""}>${ICON[id]}${label}${badge ? `<span class="badge">${badge}</span>` : ""}</button>`;
   return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Trainingsplan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("leistung", "Leistung")}${b("settings", "Mehr", n)}</div></nav>`;
@@ -1115,7 +1121,7 @@ function viewAdminHelp() {
     <p>Damit es gar nicht so weit kommt, ruft eine kleine GitHub-Aktion zweimal pro Woche die Datenbank kurz auf (Ordner <code>.github/workflows</code>). Kostenlos, liest keine Daten. Unter GitHub → <b>Actions</b> siehst du, ob sie läuft. GitHub schaltet solche geplanten Aktionen ab, wenn im Repository 60 Tage lang nichts passiert. Dann dort auf „Enable workflow“ klicken.</p>
   <h4>Datenschutz</h4><p>Im öffentlichen GitHub-Repository liegt nur der Programmcode. Alle Daten liegen in Supabase und sind nur mit freigeschaltetem Konto erreichbar. Der <b>secret- bzw. service_role-Key</b> umgeht alle Regeln und gehört nie ins Repo, in die App oder in einen Chat. Verletzungen sehen nur Trainer, Admins und die Person selbst.</p>
   <h4>Feedback zur App</h4><p>Nur Admins sehen unter Mehr → Feedback alle Rückmeldungen mit Namen. „Antworten“ zeigt die Antwort allen auf der Pinnwand, „Erledigt“ schiebt sie nach unten.</p>
-  <h4>Updates</h4><p>Bringt ein Update eine geänderte SQL-Datei mit, diese <b>vor</b> dem Mergen komplett im Supabase SQL Editor ausführen. Sie darf beliebig oft laufen, vorhandene Daten bleiben erhalten. Danach in der App unter Einstellungen → Version → Aktualisieren.</p>
+  <h4>Updates</h4><p>Die Datenbank-Datei heißt <code>supabase/alles_in_einem_vNN.sql</code>, die Nummer ist der Stand. Es gibt immer nur die aktuelle. Kommt eine neue Nummer, diese Datei <b>vor</b> dem Mergen komplett im Supabase SQL Editor ausführen. Sie darf beliebig oft laufen, vorhandene Daten bleiben erhalten. Welcher Stand in Supabase läuft, steht unter Einstellungen → Version. Fehlt ein Update, zeigt die App dem Admin oben in den Einstellungen einen Hinweis.</p>
   </div>
   <div class="card helptext">${planFormatHtml()}</div>`;
 }
@@ -1219,7 +1225,7 @@ function viewTeam() {
 function viewSettings() {
   const s = S.settings || {};
   const seg = (k, opts) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button data-act="pref" data-k="${k}" data-v="${v}" aria-pressed="${prefs[k] === v}">${l}</button>`).join("")}</div>`;
-  let html = `<h2>Darstellung</h2><div class="card">
+  let html = sqlUpdateCard() + `<h2>Darstellung</h2><div class="card">
       <label class="f"><span>Design</span>${seg("theme", [["system", "Automatisch"], ["light", "Hell"], ["dark", "Dunkel"]])}</label>
       <label class="f" style="margin:0"><span>Schriftgröße</span>${seg("textSize", [["normal", "Normal"], ["large", "Groß"]])}</label>
       <div class="hint">Gilt nur auf diesem Gerät.</div></div>
@@ -1283,12 +1289,14 @@ function viewSettings() {
   }
   html += `<h2>Daten &amp; App</h2><div class="card flush">
     <div class="setrow"><span class="grow">Meine Daten<div class="small muted">Alles, was über dich gespeichert ist, als Datei</div></span><button class="btn sm ghost" data-act="exportMine">Exportieren</button></div>
-    <div class="setrow"><span class="grow">Version<div class="small muted">${esc(VERSION)}</div></span><button class="btn sm ghost" data-act="update">Aktualisieren</button></div>
+    <div class="setrow"><span class="grow">Version<div class="small muted">${esc(VERSION)}${S.sqlVersion != null ? ` · Datenbank Stand ${S.sqlVersion || "älter als 10"}` : ""}</div></span><button class="btn sm ghost" data-act="update">Aktualisieren</button></div>
     <div class="setrow"><span class="grow">Verbunden mit<div class="small muted">${esc(S.be.host)}</div></span>
       ${S.be.kind === "demo" ? `<button class="btn sm ghost" data-act="demoReset">Demo zurücksetzen</button>` : connection()?.source === "local" ? `<button class="btn sm ghost" data-act="disconnect">Trennen</button>` : ""}</div>
     <div class="setrow"><span class="grow">Konto löschen<div class="small muted">Entfernt dein Konto und alle deine Daten</div></span><button class="btn sm danger" data-act="deleteMe">Löschen</button></div></div>`;
   return html;
 }
+const sqlOutdated = () => isAdmin() && S.sqlVersion != null && S.sqlVersion < REQUIRED_SQL;
+const sqlUpdateCard = () => sqlOutdated() ? `<div class="card warncard"><b>Datenbank-Update nötig</b><p class="small" style="margin:6px 0 0">Diese App-Version braucht Datenbank-Stand ${REQUIRED_SQL}, in Supabase läuft Stand ${S.sqlVersion || "älter als 10"}. Führe <code>supabase/alles_in_einem_v${REQUIRED_SQL}.sql</code> komplett im Supabase SQL Editor aus und lade die App dann neu.</p></div>` : "";
 function templateRow(t, i) {
   return `<div class="tplrow" data-row>
     <select name="dow" aria-label="Wochentag">${WDL.map((d, k) => `<option value="${k + 1}" ${Number(t.dow) === k + 1 ? "selected" : ""}>${d}</option>`).join("")}</select>

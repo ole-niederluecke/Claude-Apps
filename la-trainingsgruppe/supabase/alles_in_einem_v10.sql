@@ -1,4 +1,4 @@
--- Trainingsgruppe App: alle Teile (01–09) in einer Datei
+-- Trainingsgruppe App: Datenbank, Stand 10 (alle Teile 01–09 in einer Datei)
 -- Einmal komplett im Supabase SQL-Editor ausführen. Geht für die Ersteinrichtung und für jedes Update:
 -- alle Teile dürfen mehrfach laufen, vorhandene Daten bleiben erhalten.
 -- Diese Datei wird aus 01_…sql bis 09_…sql zusammengesetzt; Änderungen bitte in den Einzeldateien machen.
@@ -1238,3 +1238,9 @@ create or replace function public.ping() returns text
 language sql stable as $$ select 'ok'::text $$;
 revoke execute on function public.ping() from public;
 grant execute on function public.ping() to anon, authenticated;
+
+
+-- ═════════════════════════ Stand ═════════════════════════
+-- Die App liest diese Nummer und zeigt dem Admin, wenn ein Update fehlt.
+create or replace function public.sql_version() returns int language sql immutable as $$ select 10 $$;
+grant execute on function public.sql_version() to anon, authenticated;
