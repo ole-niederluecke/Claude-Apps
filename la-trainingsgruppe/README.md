@@ -22,8 +22,8 @@ App für die Leichtathletik-Trainingsgruppe des Leichtathletik-Teams DSHS Köln.
 | `app.js` | App-Logik (Ansichten, Rechte in der Oberfläche, Supabase- und Demo-Anbindung) |
 | `xlsx-plan.js` | Liest Excel-Dateien und erkennt die Struktur des Wochenplans |
 | `config.js` | Verbindung zum Supabase-Projekt (URL und öffentlicher Schlüssel) |
-| `supabase/alles_in_einem.sql` | Datenbank: Tabellen, Rechte-Regeln, Funktionen – einmal komplett ausführen, auch bei jedem Update |
-| `supabase/0X_….sql` | dasselbe nach Themen aufgeteilt (Quelle für `alles_in_einem.sql`) |
+| `supabase/alles_in_einem_vNN.sql` (aktuell `alles_in_einem_v10.sql`) | Datenbank: Tabellen, Rechte-Regeln, Funktionen – einmal komplett ausführen, auch bei jedem Update |
+| `supabase/0X_….sql` | dasselbe nach Themen aufgeteilt (Quelle für `alles_in_einem_vNN.sql`) |
 | `vendor/` | Supabase-Bibliothek (lokal eingebunden) |
 | `sw.js` | Offline-Cache der App-Hülle |
 | `logo.png`, `icon-*.png`, `apple-touch-icon.png`, `manifest.webmanifest` | Vereinslogo, App-Symbol und Installation |

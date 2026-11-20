@@ -1,4 +1,4 @@
--- Trainingsgruppe App: alle Teile (01–09) in einer Datei
+-- Trainingsgruppe App: Datenbank, Stand 10 (alle Teile 01–09 in einer Datei)
 -- Einmal komplett im Supabase SQL-Editor ausführen. Geht für die Ersteinrichtung und für jedes Update:
 -- alle Teile dürfen mehrfach laufen, vorhandene Daten bleiben erhalten.
 -- Diese Datei wird aus 01_…sql bis 09_…sql zusammengesetzt; Änderungen bitte in den Einzeldateien machen.
@@ -48,6 +48,8 @@ create table if not exists public.profiles (
   plan_group_id uuid references public.plan_groups (id) on delete set null,
   created_at    timestamptz not null default now()
 );
+-- trainiert selbst mit (null = Standard: Athleten ja, Trainer/Admins nein); Details in Teil 4
+alter table public.profiles add column if not exists trains boolean;
 
 -- ───────────────────────── Hilfsfunktionen ─────────────────────────
 -- security definer: lesen die eigene Rolle, ohne an RLS hängen zu bleiben.
@@ -116,12 +118,20 @@ begin
      and (new.display_name, new.role, new.approved) is not distinct from (old.display_name, old.role, old.approved) then
     return new;
   end if;
-  if my <> 'admin' then
-    if new.role <> old.role then
-      raise exception 'Nur Admins dürfen Rollen ändern';
+  -- Trainer dürfen fast alles wie Admins; nur Admin-Rechte und Admin-Profile bleiben bei den Admins
+  if my = 'trainer' then
+    if (new.role = 'admin') <> (old.role = 'admin') then
+      raise exception 'Nur Admins dürfen Admin-Rechte vergeben oder entziehen';
     end if;
-    if old.id <> me and old.role <> 'athlete' then
-      raise exception 'Nur Admins dürfen Trainer- und Admin-Profile ändern';
+    if old.id <> me and old.role = 'admin' then
+      raise exception 'Nur Admins dürfen Admin-Profile ändern';
+    end if;
+  elsif my <> 'admin' then
+    if new.role <> old.role then
+      raise exception 'Nur Trainer und Admins dürfen Rollen ändern';
+    end if;
+    if old.id <> me then
+      raise exception 'Du kannst nur dein eigenes Profil ändern';
     end if;
   end if;
   if my not in ('admin', 'trainer') then
@@ -144,8 +154,8 @@ create trigger profiles_guard
 create or replace function public.team_settings_guard() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if auth.uid() is not null and new.team_name <> old.team_name and not public.is_admin() then
-    raise exception 'Nur Admins dürfen den Teamnamen ändern';
+  if auth.uid() is not null and new.team_name <> old.team_name and not public.is_staff() then
+    raise exception 'Nur Trainer und Admins dürfen den Teamnamen ändern';
   end if;
   new.updated_at := now();
   new.updated_by := auth.uid();
@@ -188,11 +198,13 @@ drop policy if exists "gruppen: Trainer/Admin löschen" on public.plan_groups;
 create policy "gruppen: Trainer/Admin löschen" on public.plan_groups
   for delete to authenticated using (public.is_staff());
 
--- Eigenes Profil immer; freigeschaltete Profile für Mitglieder; alle für Trainer/Admin
+-- Eigenes Profil immer; alle für Trainer/Admin; für Athleten die freigeschalteten Profile –
+-- aber keine Admins (die machen nur die Verwaltung), außer ein Admin trainiert selbst mit
 drop policy if exists "profile: lesen" on public.profiles;
 create policy "profile: lesen" on public.profiles
   for select to authenticated
-  using (id = auth.uid() or public.is_staff() or (approved and public.is_member()));
+  using (id = auth.uid() or public.is_staff()
+         or (approved and public.is_member() and (role <> 'admin' or coalesce(trains, false))));
 -- Feinere Regeln (wer was ändern darf) stehen in profiles_guard
 drop policy if exists "profile: ändern" on public.profiles;
 create policy "profile: ändern" on public.profiles
@@ -208,7 +220,7 @@ language sql stable security definer set search_path = public, auth as $$
   select u.id, u.email::text from auth.users u where public.is_staff()
 $$;
 
--- Konto löschen: eigenes Konto, als Admin jedes, als Trainer nicht freigeschaltete Athleten
+-- Konto löschen: eigenes Konto, als Admin jedes, als Trainer alle außer Admins
 create or replace function public.delete_user(target uuid) returns void
 language plpgsql security definer set search_path = public, auth as $$
 declare
@@ -222,7 +234,7 @@ begin
   if target <> auth.uid() then
     if my = 'admin' then
       null;
-    elsif my = 'trainer' and t.role = 'athlete' and not t.approved then
+    elsif my = 'trainer' and t.role <> 'admin' then
       null;
     else
       raise exception 'Keine Berechtigung, dieses Konto zu löschen';
@@ -1226,3 +1238,9 @@ create or replace function public.ping() returns text
 language sql stable as $$ select 'ok'::text $$;
 revoke execute on function public.ping() from public;
 grant execute on function public.ping() to anon, authenticated;
+
+
+-- ═════════════════════════ Stand ═════════════════════════
+-- Die App liest diese Nummer und zeigt dem Admin, wenn ein Update fehlt.
+create or replace function public.sql_version() returns int language sql immutable as $$ select 10 $$;
+grant execute on function public.sql_version() to anon, authenticated;

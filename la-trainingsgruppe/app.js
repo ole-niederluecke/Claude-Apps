@@ -1,5 +1,7 @@
 "use strict";
-const VERSION = "19.11.2026 · 17";
+const VERSION = "20.11.2026 · 3";
+// Stand der Datenbank, den diese App-Version braucht (= Nummer in supabase/alles_in_einem_vNN.sql)
+const REQUIRED_SQL = 10;
 const APP_ID = "la-trainingsgruppe";
 
 /* ───────────── Hilfen ───────────── */
@@ -44,7 +46,7 @@ function deErr(e) {
   const map = [
     [/Invalid login credentials/i, "E-Mail oder Passwort ist falsch."],
     [/Email not confirmed/i, "Bitte bestätige zuerst deine E-Mail-Adresse (Link in der Mail)."],
-    [/already registered|already been registered|user already exists/i, "Für diese E-Mail gibt es schon ein Konto."],
+    [/already registered|already been registered|user already exists/i, "Für diese E-Mail gibt es schon ein Konto. Melde dich an – oder nimm für ein zweites Konto eine andere Adresse (bei Gmail z. B. name+athlet@gmail.com, landet im selben Postfach)."],
     [/Password should be at least (\d+)/i, (_, n) => `Das Passwort muss mindestens ${n} Zeichen haben.`],
     [/New password should be different/i, "Das neue Passwort muss sich vom alten unterscheiden."],
     [/rate limit|too many requests|security purposes/i, "Zu viele Versuche. Bitte warte ein paar Minuten."],
@@ -183,6 +185,8 @@ function makeSupabaseBackend(url, key) {
     },
     async answerInvite(entryId, status) { ok(await sb.rpc("answer_competition", { p_entry: entryId, p_status: status })); },
     async feedbackBoard() { return ok(await sb.rpc("feedback_board")) || []; },
+    // vor Stand 10 gab es die Funktion noch nicht → 0
+    async sqlVersion() { const r = await sb.rpc("sql_version"); return r.error ? 0 : Number(r.data) || 0; },
     async voteFeedback(id, on) {
       if (on) ok(await T("feedback_votes").upsert({ feedback_id: id, user_id: S.me.id }, { onConflict: "feedback_id,user_id", ignoreDuplicates: true }));
       else ok(await T("feedback_votes").delete().eq("feedback_id", id).eq("user_id", S.me.id));
@@ -250,7 +254,7 @@ function demoSeed() {
     settings: { id: 1, team_name: "LT DSHS Köln (Demo)", plan_visibility: "all", session_template: [{ dow: 2, time: "17:25", location: "LAA" }, { dow: 4, time: "17:55", location: "LAA" }, { dow: 6, time: "09:55", location: "LAA" }] },
     plan_groups: [g("g1", "Kurzsprint", 1), g("g2", "Langsprint", 2), g("g3", "Stab", 3), g("g4", "Alternativplan", 4)],
     profiles: [
-      Object.assign(p("u-admin", "Alex Admin", "admin", true, "g1"), { trains: true }), p("u-trainer", "Toni Trainer", "trainer", true, null),
+      p("u-admin", "Alex Admin", "admin", true, null), p("u-trainer", "Toni Trainer", "trainer", true, null),
       p("u1", "Lena Berger", "athlete", true, "g1"), p("u2", "Jonas Keller", "athlete", true, "g1"),
       p("u3", "Mia Schulz", "athlete", true, "g2"), p("u4", "Paul Wagner", "athlete", true, "g2"),
       p("u5", "Sara Neumann", "athlete", true, "g3"), p("u6", "Noah Fischer", "athlete", true, null),
@@ -309,7 +313,7 @@ function demoPerformance(db) {
   const N = (id, test_id, sex, group_id, value) => ({ id, test_id, sex, group_id, value });
   db.norms = [N("n1", "t1", "m", null, 3.4), N("n2", "t1", "w", null, 3.65), N("n3", "t2", "m", "g1", 9.9), N("n4", "t2", "w", "g1", 10.7),
     N("n5", "t3", "m", "g2", 40.1), N("n6", "t3", "w", "g2", 45.3), N("n7", "t6", "m", null, 2.65), N("n8", "t6", "w", null, 2.35)];
-  const sex = { "u-admin": "m", u1: "w", u2: "m", u3: "w", u4: "m", u5: "w", u6: "m" };
+  const sex = { u1: "w", u2: "m", u3: "w", u4: "m", u5: "w", u6: "m" };
   db.athlete_info = Object.entries(sex).map(([user_id, s]) => ({ user_id, sex: s, norm_group_ids: user_id === "u4" ? ["g1"] : [] }));
   const t = todayIso(), d = n => addDays(t, -n);
   db.injuries = [{ id: "i1", user_id: "u6", start_date: d(25), end_date: null, note: "Muskelfaserriss Oberschenkel", exclude_attendance: true, exclude_tests: true }];
@@ -371,7 +375,7 @@ function demoCompact(db) {
 }
 function demoAutoOpen(settings, monday) { return autoOpenAt(settings, monday); }
 function makeDemoBackend() {
-  const KEY = "la_demo_db_v9";
+  const KEY = "la_demo_db_v10";
   let db = LS.get(KEY, null) || demoPerformance(demoSeed());
   const save = () => LS.set(KEY, db);
   const me = () => LS.get("la_demo_user", "u-admin");
@@ -388,6 +392,7 @@ function makeDemoBackend() {
   const now = () => new Date().toISOString();
   return {
     kind: "demo", host: "Demo auf diesem Gerät",
+    async sqlVersion() { return REQUIRED_SQL; },
     users: () => db.profiles.slice().sort(byName),
     switchUser(id) { LS.set("la_demo_user", id); },
     reset() { db = demoPerformance(demoSeed()); save(); LS.set("la_demo_user", "u-admin"); },
@@ -395,15 +400,19 @@ function makeDemoBackend() {
     onAuth() {},
     async signOut() {},
     async myProfile(id) { await wait(); return clone(db.profiles.find(p => p.id === id) || null); },
-    async profiles() { return clone(db.profiles.filter(p => p.id === me() || staff() || (p.approved && myRole()))); },
+    // wie „profile: lesen“ in Teil 1: Athleten sehen keine Admins, außer der Admin trainiert selbst mit
+    async profiles() { return clone(db.profiles.filter(p => p.id === me() || staff() || (p.approved && myRole() && (p.role !== "admin" || p.trains)))); },
     async emails() { return staff() ? db.profiles.map(p => ({ id: p.id, email: email(p) })) : []; },
     async updateProfile(id, patch) {
       const old = db.profiles.find(p => p.id === id), my = myRole() || "";
       if (!old || !(id === me() || staff())) deny();
       const n = Object.assign({}, old, patch);
-      if (my !== "admin") {
-        if (n.role !== old.role) deny("Nur Admins dürfen Rollen ändern");
-        if (old.id !== me() && old.role !== "athlete") deny("Nur Admins dürfen Trainer- und Admin-Profile ändern");
+      if (my === "trainer") {
+        if ((n.role === "admin") !== (old.role === "admin")) deny("Nur Admins dürfen Admin-Rechte vergeben oder entziehen");
+        if (old.id !== me() && old.role === "admin") deny("Nur Admins dürfen Admin-Profile ändern");
+      } else if (my !== "admin") {
+        if (n.role !== old.role) deny("Nur Trainer und Admins dürfen Rollen ändern");
+        if (old.id !== me()) deny("Du kannst nur dein eigenes Profil ändern");
       }
       if (!["admin", "trainer"].includes(my) && (n.approved !== old.approved || n.plan_group_id !== old.plan_group_id))
         deny("Freischaltung und Trainingsgruppe dürfen nur Trainer und Admins ändern");
@@ -413,7 +422,7 @@ function makeDemoBackend() {
     async deleteUser(id) {
       const t = db.profiles.find(p => p.id === id), my = myRole() || "";
       if (!t) return;
-      if (id !== me() && !(my === "admin" || (my === "trainer" && t.role === "athlete" && !t.approved))) deny("Keine Berechtigung, dieses Konto zu löschen");
+      if (id !== me() && !(my === "admin" || (my === "trainer" && t.role !== "admin"))) deny("Keine Berechtigung, dieses Konto zu löschen");
       if (t.role === "admin" && t.approved && !otherAdmins(id)) deny("Der letzte Admin kann nicht gelöscht werden");
       db.profiles = db.profiles.filter(p => p.id !== id);
       ["attendance", "attendance_private", "attendance_log"].forEach(k => db[k] = db[k].filter(r => r.user_id !== id));
@@ -422,7 +431,6 @@ function makeDemoBackend() {
     async settings() { return myRole() ? clone(db.settings) : null; },
     async updateSettings(patch) {
       needStaff();
-      if ("team_name" in patch && patch.team_name !== db.settings.team_name && myRole() !== "admin") deny("Nur Admins dürfen den Teamnamen ändern");
       Object.assign(db.settings, patch); save(); return clone(db.settings);
     },
     async groups() { return myRole() ? clone(db.plan_groups.slice().sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name))) : []; },
@@ -614,7 +622,8 @@ if (S.tab === "team") S.tab = "settings";
 const role = () => S.me && S.me.role;
 const isAdmin = () => role() === "admin";
 const isStaff = () => role() === "admin" || role() === "trainer";
-const canEdit = p => p.id === S.me.id || isAdmin() || (role() === "trainer" && p.role === "athlete");
+// Trainer dürfen fast alles wie Admins – nur Admin-Profile und Admin-Rechte bleiben bei den Admins
+const canEdit = p => p.id === S.me.id || isAdmin() || (role() === "trainer" && p.role !== "admin");
 const groupName = id => (S.groups.find(g => g.id === id) || {}).name;
 const pending = () => S.profiles.filter(p => !p.approved && p.role === "athlete");
 const trainsP = p => p.trains == null ? p.role === "athlete" : !!p.trains;          // trainiert mit (Zu-/Absagen, Tests, Statistik)
@@ -651,6 +660,7 @@ async function loadAll() {
   S.sheetCache = {}; S.sheetChoice = {}; S.loadedAt = Date.now();
   S.emails = {};
   if (isStaff()) (await S.be.emails()).forEach(r => S.emails[r.id] = r.email);
+  S.sqlVersion = isAdmin() ? await S.be.sqlVersion().catch(() => 0) : null;
   await Promise.all([loadSessions(), reloadPerf()]);
   S.stats = { loaded: false };
   const plan = planForWeek(mondayOf(todayIso()));
@@ -785,7 +795,7 @@ function viewTop() {
     <button class="acctbtn" data-act="account" aria-label="Konto: ${esc(S.me.display_name)}"><span class="avatar ${role()}">${esc(initials(S.me.display_name))}</span></button></div></header>`;
 }
 function viewNav() {
-  const n = (isStaff() ? pending().length : 0) + (isAdmin() ? S.feedback.filter(f => f.status === "neu").length : 0);
+  const n = (isStaff() ? pending().length : 0) + (isAdmin() ? S.feedback.filter(f => f.status === "neu").length : 0) + (sqlOutdated() ? 1 : 0);
   const ns = nextSession(), myOpen = (ns && trainsP(S.me) && weekOpen(mondayOf(ns.session_date)) && !attOf(ns.id, S.me.id)?.status) || pendingInvites().length ? 1 : 0;
   const b = (id, label, badge) => `<button data-act="tab" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ""}>${ICON[id]}${label}${badge ? `<span class="badge">${badge}</span>` : ""}</button>`;
   return `<nav class="tabs" aria-label="Hauptmenü"><div class="in">${b("start", "Start")}${b("plan", "Trainingsplan")}${b("termine", "Termine", myOpen ? "!" : 0)}${b("leistung", "Leistung")}${b("settings", "Mehr", n)}</div></nav>`;
@@ -1075,33 +1085,43 @@ function viewTraining() {
 /* ───── Mehr: Team + Einstellungen ───── */
 function viewMore() {
   const n = isStaff() ? pending().length : 0, nf = S.feedback.filter(f => f.status === "neu").length;
-  if ((S.moreView === "feedback" || S.moreView === "help") && !isAdmin()) S.moreView = "team";
+  if ((S.moreView === "feedback" && !isAdmin()) || (S.moreView === "help" && !isStaff())) S.moreView = "team";
   return `<div class="seg" style="margin-bottom:14px"><button data-act="moreView" data-v="team" aria-pressed="${S.moreView === "team"}">Team${n ? ` (${n})` : ""}</button>
     ${isAdmin() ? `<button data-act="moreView" data-v="feedback" aria-pressed="${S.moreView === "feedback"}">Feedback${nf ? ` (${nf})` : ""}</button>` : ""}
     <button data-act="moreView" data-v="settings" aria-pressed="${S.moreView === "settings" || S.moreView === "help"}">Einstellungen</button></div>`
     + (S.moreView === "settings" ? viewSettings() : S.moreView === "feedback" ? viewFeedbackAdmin() : S.moreView === "help" ? viewAdminHelp() : viewTeam());
 }
 function viewAdminHelp() {
-  if (!isAdmin()) return `<div class="card muted">Nur für Admins.</div>`;
+  if (!isStaff()) return `<div class="card muted">Nur für Trainer und Admins.</div>`;
   const R = (t, a, tr, ad) => `<tr><td>${t}</td><td>${a ? "✓" : ""}</td><td>${tr ? "✓" : ""}</td><td>${ad ? "✓" : ""}</td></tr>`;
   return `<div class="btns" style="margin:0 0 10px"><button class="btn ghost" data-act="moreView" data-v="settings">← Zurück zu den Einstellungen</button></div>
-  <div class="card helptext"><h3>Admin-Handbuch</h3><p class="small muted">Nur für Admins sichtbar.</p>
+  <div class="card helptext"><h3>Handbuch</h3><p class="small muted">Für Trainer und Admins. Athleten sehen es nicht.</p>
+  <h4>Eine Trainingswoche</h4><ol class="steps">
+    <li><b>Plan hochladen:</b> Trainingsplan → „Neuen Plan hochladen“, Excel-Datei wählen. Jedes Blatt einer Trainingsgruppe zuordnen; einzelne Athleten lassen sich zusätzlich zuweisen („Zuordnung ändern“).</li>
+    <li><b>Anmeldung öffnen:</b> Termine → „Jetzt öffnen“. Oder automatisch unter Einstellungen → Trainingsanmeldung.</li>
+    <li><b>Vor dem Training:</b> Beim Termin auf <i>dabei</i>, <i>abgesagt</i> oder <i>offen</i> tippen. Dort stehen Namen und Absagegründe.</li>
+    <li><b>Nach dem Training:</b> Person antippen → „zu spät“ oder „nicht erschienen“ markieren. Fehlt eine Absage, kannst du sie für die Person nachtragen.</li>
+    <li><b>Tests und Wettkämpfe:</b> Werte unter Leistung → Eintragen. Wettkämpfe unter Termine → Saison &amp; Wettkämpfe anlegen und die Leute auswählen, die starten sollen.</li></ol>
   <h4>Rollen</h4><div class="tablewrap"><table class="grid roles"><tr><th></th><th>Athlet</th><th>Trainer</th><th>Admin</th></tr>
-    ${R("Wochenplan ansehen, zu-/absagen, eigene Werte und Beteiligung", 1, 1, 1)}${R("Wettkampfergebnisse eintragen", 1, 1, 1)}
-    ${R("Übungen anlegen, Plan hochladen", 0, 1, 1)}${R("Absagegründe, Verlauf, Statistik sehen", 0, 1, 1)}${R("Freischalten, Gruppen zuordnen", 0, 1, 1)}
-    ${R("Woche öffnen, Termine, Saisonpause, Tests, Normen, Verletzungen", 0, 1, 1)}${R("Rollen vergeben, Teamname, Backup, Feedback", 0, 0, 1)}</table></div>
+    ${R("Wochenplan ansehen, zu-/absagen, eigene Werte und Beteiligung", 1, 1, 1)}${R("Wettkampfergebnisse eintragen, Feedback schicken", 1, 1, 1)}
+    ${R("Plan hochladen, Übungen, Termine, Saisonpause, Tests, Normen, Verletzungen", 0, 1, 1)}${R("Absagegründe, Verlauf, Statistik", 0, 1, 1)}
+    ${R("Freischalten, Gruppen, Rollen Athlet/Trainer, Konten löschen, Teamname", 0, 1, 1)}${R("Admin-Rechte vergeben, Admin-Profile ändern, Backup, Feedback zur App", 0, 0, 1)}</table></div>
+  <h4>Admins sind für Athleten unsichtbar</h4><p>Der Admin macht nur die Verwaltung. Athleten sehen Admins deshalb nicht im Team, und Admins zählen nicht in Termine oder Statistik. Trainer und andere Admins sehen sie weiter.</p>
+    <p><b>Admin, der selbst trainiert:</b> Am einfachsten ein zweites Konto als Athlet anlegen. Supabase erlaubt jede E-Mail-Adresse nur einmal. Bei Gmail kommt <code>name+athlet@gmail.com</code> aber im selben Postfach an wie <code>name@gmail.com</code>, das Passwort darf gleich sein. Das neue Konto registrieren und mit dem Admin-Konto unter Mehr → Team freischalten. Alternativ: In „Mein Konto“ den Haken „Ich trainiere selbst mit“ setzen. Dann sehen dich die Athleten aber wieder.</p>
   <h4>Neue Mitglieder</h4><p>Wer den Link hat, kann sich registrieren, sieht aber nichts, bis ein Trainer oder Admin ihn unter <b>Mehr → Team</b> freischaltet. Schalte nur Leute frei, die du kennst. Trainer bekommen ihre Rolle im Profil (Name antippen → Rolle).</p>
-  <h4>Trainingsanmeldung</h4><p>Athleten können erst zu-/absagen, wenn die Woche geöffnet ist („Jetzt öffnen“ unter Termine, oder automatisch unter Einstellungen → Trainingsanmeldung). Trainer sagen nicht zu, können aber „Ich bin nicht da“ eintragen. Wer als Admin/Trainer selbst trainiert, setzt in „Mein Konto“ den Haken „Ich trainiere selbst mit“.</p>
+  <h4>Trainingsanmeldung</h4><p>Athleten können erst zu-/absagen, wenn die Woche geöffnet ist. Trainer sagen nicht zu, können aber „Ich bin nicht da“ eintragen. Wer als Trainer selbst trainiert, setzt in „Mein Konto“ den Haken „Ich trainiere selbst mit“.</p>
   <h4>Saisonpause und Ausfall</h4><p><b>Saisonpause:</b> Termine → „+ Saisonpause“ (von–bis). In der Zeit fällt jedes Training aus und nichts zählt in die Statistik. <b>Einzelnes Training:</b> Termin antippen → „Training fällt aus“. Absagen wegen <i>Urlaub</i> oder <i>Heimatbesuch</i> zählen nicht als Fehlen.</p>
   <h4>Alte Trainings</h4><p>Nach 14 Tagen bleiben von einem Training nur die Zahlen für die Statistik. Einzelne Absagen, Gründe und Freitext werden gelöscht.</p>
   <h4>Wettkämpfe melden</h4><p>Beim Anlegen eines Wettkampfs wählt der Trainer aus, wen er melden möchte. Nur diese Personen sehen ihn und sagen auf der Startseite zu oder ab. Teilnehmer und Antworten lassen sich danach jederzeit ändern.</p>
   <h4>Übungsvideos</h4><p>Am besten auf YouTube als <b>„nicht gelistet“</b> hochladen und den Link bei der Übung eintragen. Das Video läuft direkt in der App und braucht keinen Speicher. „Privat“ geht nicht, private Videos sieht nur der Besitzer.</p>
+  <h3 style="margin-top:22px">Technik (macht der Admin)</h3>
   <h4>Datenmenge</h4><p>Kostenlos sind 500 MB Datenbank und 1 GB für Videos. Die Gruppe braucht nur wenige MB pro Jahr, Platz kosten nur hochgeladene Videos.</p>
-  <h4>Backup</h4><p>Supabase sichert in der kostenlosen Stufe nicht automatisch. Lade regelmäßig unter Einstellungen → Admin → Backup eine Sicherung herunter. Videos sind nicht enthalten.</p>
+  <h4>Backup</h4><p>Supabase sichert in der kostenlosen Stufe nicht automatisch. Lade als Admin regelmäßig unter Einstellungen → Backup eine Sicherung herunter. Videos sind nicht enthalten.</p>
   <h4>Supabase pausiert</h4><p>Kostenlose Supabase-Projekte werden nach 7 Tagen <b>ohne jeden Zugriff</b> angehalten, um Rechenleistung zu sparen. Die App zeigt dann nur noch einen Verbindungsfehler, die Daten bleiben aber erhalten. Wieder starten: im Supabase-Dashboard beim Projekt auf <b>Restore</b> klicken (dauert ein paar Minuten).</p>
     <p>Damit es gar nicht so weit kommt, ruft eine kleine GitHub-Aktion zweimal pro Woche die Datenbank kurz auf (Ordner <code>.github/workflows</code>). Kostenlos, liest keine Daten. Unter GitHub → <b>Actions</b> siehst du, ob sie läuft. GitHub schaltet solche geplanten Aktionen ab, wenn im Repository 60 Tage lang nichts passiert. Dann dort auf „Enable workflow“ klicken.</p>
   <h4>Datenschutz</h4><p>Im öffentlichen GitHub-Repository liegt nur der Programmcode. Alle Daten liegen in Supabase und sind nur mit freigeschaltetem Konto erreichbar. Der <b>secret- bzw. service_role-Key</b> umgeht alle Regeln und gehört nie ins Repo, in die App oder in einen Chat. Verletzungen sehen nur Trainer, Admins und die Person selbst.</p>
-  <h4>Updates</h4><p>Bringt ein Update eine geänderte SQL-Datei mit, diese <b>vor</b> dem Mergen komplett im Supabase SQL Editor ausführen. Sie darf beliebig oft laufen, vorhandene Daten bleiben erhalten. Danach in der App unter Einstellungen → Version → Aktualisieren.</p>
+  <h4>Feedback zur App</h4><p>Nur Admins sehen unter Mehr → Feedback alle Rückmeldungen mit Namen. „Antworten“ zeigt die Antwort allen auf der Pinnwand, „Erledigt“ schiebt sie nach unten.</p>
+  <h4>Updates</h4><p>Die Datenbank-Datei heißt <code>supabase/alles_in_einem_vNN.sql</code>, die Nummer ist der Stand. Es gibt immer nur die aktuelle. Kommt eine neue Nummer, diese Datei <b>vor</b> dem Mergen komplett im Supabase SQL Editor ausführen. Sie darf beliebig oft laufen, vorhandene Daten bleiben erhalten. Welcher Stand in Supabase läuft, steht unter Einstellungen → Version. Fehlt ein Update, zeigt die App dem Admin oben in den Einstellungen einen Hinweis.</p>
   </div>
   <div class="card helptext">${planFormatHtml()}</div>`;
 }
@@ -1167,12 +1187,14 @@ function feedbackSheet() {
     <div id="fb-board">${fbBoardHtml()}</div>`);
 }
 /* ───── Team ───── */
+// Für Athleten erscheint ein Admin, der selbst mittrainiert, wie ein Athlet (Admins machen nur die Verwaltung)
+const shownRole = p => p.role === "admin" && !isStaff() ? "athlete" : p.role;
 function memberRow(p) {
-  const g = groupName(p.plan_group_id);
-  const meta = [p.role === "athlete" ? (g || "keine Gruppe") : g, isStaff() ? S.emails[p.id] : null].filter(Boolean).map(esc).join(" · ");
-  const flags = (p.role !== "athlete" ? roleChip(p.role) : "") + (!p.approved ? ` <span class="chip off">gesperrt</span>` : "");
+  const g = groupName(p.plan_group_id), r = shownRole(p);
+  const meta = [r === "athlete" ? (g || "keine Gruppe") : g, isStaff() ? S.emails[p.id] : null].filter(Boolean).map(esc).join(" · ");
+  const flags = (r !== "athlete" ? roleChip(r) : "") + (!p.approved ? ` <span class="chip off">gesperrt</span>` : "");
   return `<button class="row" data-act="member" data-id="${esc(p.id)}">
-    <span class="avatar ${p.role}">${esc(initials(p.display_name))}</span>
+    <span class="avatar ${r}">${esc(initials(p.display_name))}</span>
     <span class="grow"><span class="name">${esc(p.display_name)}${p.id === S.me.id ? ' <span class="muted">(du)</span>' : ""}</span><span class="meta">${meta || "&nbsp;"}</span></span>
     ${flags}<span class="chev">${ICON.chev}</span></button>`;
 }
@@ -1181,14 +1203,15 @@ function viewTeam() {
   const staff = isStaff();
   const waiting = staff ? S.profiles.filter(isWaiting) : [];
   const rest = S.profiles.filter(p => !waiting.includes(p));
-  const coaches = rest.filter(p => p.role !== "athlete"), athletes = rest.filter(p => p.role === "athlete");
+  const coaches = rest.filter(p => shownRole(p) !== "athlete"), athletes = rest.filter(p => shownRole(p) === "athlete");
   let html = "";
   if (waiting.length) html += `<h2>Wartet auf Freischaltung</h2><div class="card flush">` + waiting.map(p => `
       <div class="row"><span class="avatar">${esc(initials(p.display_name))}</span>
         <span class="grow"><span class="name">${esc(p.display_name)}</span><span class="meta">${esc(S.emails[p.id] || "")}</span></span>
         <button class="btn sm" data-act="approve" data-id="${esc(p.id)}">Freischalten</button>
         <button class="iconbtn" data-act="reject" data-id="${esc(p.id)}" aria-label="Ablehnen" title="Ablehnen">${ICON.trash}</button></div>`).join("") + `</div>`;
-  html += `<h2>Trainer &amp; Admins</h2><div class="card flush">${coaches.map(memberRow).join("") || `<div class="row muted">Niemand</div>`}</div>`;
+  html += `<h2>${staff ? "Trainer &amp; Admins" : "Trainer"}</h2><div class="card flush">${coaches.map(memberRow).join("") || `<div class="row muted">Niemand</div>`}</div>`;
+  if (staff && coaches.some(p => p.role === "admin" && !trainsP(p))) html += `<p class="small muted" style="margin:-4px 4px 10px">Admins sind für Athleten unsichtbar.</p>`;
   html += `<h2>Athleten</h2><div class="card flush">`;
   const groups = S.groups.map(g => [g.name, athletes.filter(a => a.plan_group_id === g.id)]);
   groups.push(["Ohne Trainingsgruppe", athletes.filter(a => !groupName(a.plan_group_id))]);
@@ -1202,7 +1225,7 @@ function viewTeam() {
 function viewSettings() {
   const s = S.settings || {};
   const seg = (k, opts) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button data-act="pref" data-k="${k}" data-v="${v}" aria-pressed="${prefs[k] === v}">${l}</button>`).join("")}</div>`;
-  let html = `<h2>Darstellung</h2><div class="card">
+  let html = sqlUpdateCard() + `<h2>Darstellung</h2><div class="card">
       <label class="f"><span>Design</span>${seg("theme", [["system", "Automatisch"], ["light", "Hell"], ["dark", "Dunkel"]])}</label>
       <label class="f" style="margin:0"><span>Schriftgröße</span>${seg("textSize", [["normal", "Normal"], ["large", "Groß"]])}</label>
       <div class="hint">Gilt nur auf diesem Gerät.</div></div>
@@ -1234,7 +1257,12 @@ function viewSettings() {
       <h2>Trainingsanmeldung</h2><div class="card">
       <p class="small muted">Athleten können erst zu- oder absagen, wenn die Woche geöffnet ist. Öffnen geht jederzeit unter <b>Termine</b>.</p>
       <form data-form="regauto">
-        ${[["manual", "Nur von Hand öffnen"], ["7", "Automatisch am Sonntag vor der Woche"], ["1", "Automatisch am Montag der Woche"]].map(([v, l]) => `<label class="opt"><input type="radio" name="mode" value="${v}" ${String((s.registration_auto || {}).dow || "manual") === v ? "checked" : ""}><span><b>${l}</b></span></label>`).join("")}
+        ${(() => { const dow = Number((s.registration_auto || {}).dow) || 0;
+          // 2–7 = Dienstag–Sonntag vor der Woche; 1 (Montag der Woche) bleibt nur für alte Einstellungen wählbar
+          const days = [[5, "Freitag"], [6, "Samstag"], [7, "Sonntag"], [4, "Donnerstag"], [3, "Mittwoch"], [2, "Dienstag"]];
+          return `<label class="opt"><input type="radio" name="mode" value="manual" ${dow ? "" : "checked"}><span><b>Nur von Hand öffnen</b></span></label>
+          <label class="opt"><input type="radio" name="mode" value="auto" ${dow ? "checked" : ""}><span><b>Automatisch in der Woche davor</b><span class="small muted">Wochentag und Uhrzeit wählst du unten.</span></span></label>
+          <label class="f"><span>Wochentag (vor der Trainingswoche)</span><select name="dow">${days.map(([v, l]) => `<option value="${v}" ${dow === v || (!dow && v === 7) ? "selected" : ""}>${l} vor der Woche</option>`).join("")}${dow === 1 ? `<option value="1" selected>Montag der Woche selbst</option>` : ""}</select></label>`; })()}
         <label class="f"><span>Uhrzeit für automatisches Öffnen</span><input type="time" name="time" value="${esc((s.registration_auto || {}).time || "18:00")}"></label>
         <button class="btn sm ghost">Speichern</button></form></div>
       <h2>Feste Trainingstage</h2><div class="card">
@@ -1243,15 +1271,17 @@ function viewSettings() {
       <div class="btns"><button type="button" class="btn sm ghost" data-act="tplAdd">+ Tag</button><button class="btn sm">Speichern</button></div>
       <div class="hint">Änderungen gelten für Wochen, die noch nicht angelegt sind (ab übernächster Woche). Die aktuelle und nächste Woche passt du direkt unter Termine an.</div></form></div>`;
   }
-  if (isAdmin()) {
-    html += `<h2>Admin</h2><div class="card">
+  if (isStaff()) {
+    html += `<h2>Verwaltung</h2><div class="card">
       <label class="opt"><input type="checkbox" data-change="betaToggle" ${s.beta !== false ? "checked" : ""}><span><b>Beta-Phase</b><span class="small muted">Zeigt „Beta“ in der Kopfzeile. Ein Tipp darauf öffnet das Feedback-Formular.</span></span></label>
       <form data-form="teamname"><label class="f"><span>Name der Trainingsgruppe</span><input type="text" name="name" required maxlength="60" value="${esc(s.team_name || "")}"></label>
       <button class="btn sm ghost">Speichern</button></form></div>
-      <div class="card"><h3>Admin-Handbuch</h3><p class="small muted">Rollen, Abläufe, Datenschutz, Datenmenge, Supabase. Nur für Admins sichtbar.</p>
-      <button class="btn ghost" data-act="moreView" data-v="help">Handbuch öffnen</button></div>
-      <div class="card"><h3>Backup</h3>
-      <p class="small muted">Sichert Einstellungen, Trainingsgruppen, Rollen, Pläne, Übungen, Termine und Zu-/Absagen als Datei. Videos sind nicht enthalten. Beim Wiederherstellen werden diese Werte zurückgeschrieben; Konten werden dabei weder angelegt noch gelöscht.</p>
+      <div class="card"><h3>Handbuch</h3><p class="small muted">Anleitung für Trainer und Admins: Ablauf einer Woche, Rollen, Plan-Format, Technik.</p>
+      <button class="btn ghost" data-act="moreView" data-v="help">Handbuch öffnen</button></div>`;
+  }
+  if (isAdmin()) {
+    html += `<div class="card"><h3>Backup</h3>
+      <p class="small muted">Nur für Admins. Sichert Einstellungen, Trainingsgruppen, Rollen, Pläne, Übungen, Termine und Zu-/Absagen als Datei. Videos sind nicht enthalten. Beim Wiederherstellen werden diese Werte zurückgeschrieben; Konten werden dabei weder angelegt noch gelöscht.</p>
       <div class="btns"><button class="btn" data-act="backup">Backup herunterladen</button>
       <button class="btn ghost" data-act="restore">Wiederherstellen …</button></div>
       ${LS.get("la_last_backup", null) ? `<div class="hint">Letztes Backup von diesem Gerät: ${new Date(LS.get("la_last_backup")).toLocaleString("de-DE")}</div>` : ""}
@@ -1259,12 +1289,14 @@ function viewSettings() {
   }
   html += `<h2>Daten &amp; App</h2><div class="card flush">
     <div class="setrow"><span class="grow">Meine Daten<div class="small muted">Alles, was über dich gespeichert ist, als Datei</div></span><button class="btn sm ghost" data-act="exportMine">Exportieren</button></div>
-    <div class="setrow"><span class="grow">Version<div class="small muted">${esc(VERSION)}</div></span><button class="btn sm ghost" data-act="update">Aktualisieren</button></div>
+    <div class="setrow"><span class="grow">Version<div class="small muted">${esc(VERSION)}${S.sqlVersion != null ? ` · Datenbank Stand ${S.sqlVersion || "älter als 10"}` : ""}</div></span><button class="btn sm ghost" data-act="update">Aktualisieren</button></div>
     <div class="setrow"><span class="grow">Verbunden mit<div class="small muted">${esc(S.be.host)}</div></span>
       ${S.be.kind === "demo" ? `<button class="btn sm ghost" data-act="demoReset">Demo zurücksetzen</button>` : connection()?.source === "local" ? `<button class="btn sm ghost" data-act="disconnect">Trennen</button>` : ""}</div>
     <div class="setrow"><span class="grow">Konto löschen<div class="small muted">Entfernt dein Konto und alle deine Daten</div></span><button class="btn sm danger" data-act="deleteMe">Löschen</button></div></div>`;
   return html;
 }
+const sqlOutdated = () => isAdmin() && S.sqlVersion != null && S.sqlVersion < REQUIRED_SQL;
+const sqlUpdateCard = () => sqlOutdated() ? `<div class="card warncard"><b>Datenbank-Update nötig</b><p class="small" style="margin:6px 0 0">Diese App-Version braucht Datenbank-Stand ${REQUIRED_SQL}, in Supabase läuft Stand ${S.sqlVersion || "älter als 10"}. Führe <code>supabase/alles_in_einem_v${REQUIRED_SQL}.sql</code> komplett im Supabase SQL Editor aus und lade die App dann neu.</p></div>` : "";
 function templateRow(t, i) {
   return `<div class="tplrow" data-row>
     <select name="dow" aria-label="Wochentag">${WDL.map((d, k) => `<option value="${k + 1}" ${Number(t.dow) === k + 1 ? "selected" : ""}>${d}</option>`).join("")}</select>
@@ -1958,9 +1990,10 @@ function askText(title, label, value = "") {
 function memberSheet(id) {
   const p = person(id); if (!p) return;
   const edit = canEdit(p), self = p.id === S.me.id, staffEdit = isStaff() && edit;
-  const canDelete = !self && (isAdmin() || (role() === "trainer" && p.role === "athlete" && !p.approved));
+  const canDelete = !self && (isAdmin() || (role() === "trainer" && p.role !== "admin"));
+  const roles = isAdmin() ? ["athlete", "trainer", "admin"] : ["athlete", "trainer"];
   const groupOpts = `<option value="">– keine –</option>` + S.groups.map(g => `<option value="${esc(g.id)}" ${g.id === p.plan_group_id ? "selected" : ""}>${esc(g.name)}</option>`).join("");
-  const info = `<p class="muted small">${roleChip(p.role)} ${S.emails[p.id] ? esc(S.emails[p.id]) : ""}</p>`;
+  const info = `<p class="muted small">${roleChip(shownRole(p))} ${S.emails[p.id] ? esc(S.emails[p.id]) : ""}</p>`;
   if (!edit) {
     sheet(`<h3>${esc(p.display_name)}</h3>${info}<p>Trainingsgruppe: <b>${esc(groupName(p.plan_group_id) || "keine")}</b></p>
       <div class="btns"><button class="btn ghost" data-act="closeSheet">Schließen</button></div>`);
@@ -1970,9 +2003,9 @@ function memberSheet(id) {
     <form data-form="member" data-id="${esc(p.id)}">
       <label class="f"><span>Name</span><input type="text" name="name" required maxlength="60" value="${esc(p.display_name)}"></label>
       ${staffEdit ? `<label class="f"><span>Trainingsgruppe</span><select name="group">${groupOpts}</select><div class="hint">Bestimmt, welches Blatt im Wochenplan zuerst geöffnet wird.</div></label>` : ""}
-      ${isAdmin() ? `<label class="f"><span>Rolle</span><select name="role">${["athlete", "trainer", "admin"].map(r => `<option value="${r}" ${r === p.role ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select>
-        <div class="hint">Trainer: Freischalten, Gruppen, Pläne, Termine, Absagegründe sehen. Admin: zusätzlich Rollen, Teamname, Backup.</div></label>` : ""}
-      ${isAdmin() && p.role !== "athlete" ? `<label class="opt"><input type="checkbox" name="trains" ${trainsP(p) ? "checked" : ""}><span><b>Trainiert selbst mit</b><span class="small muted">Zu-/Absagen, Tests und Statistik wie bei Athleten.</span></span></label>` : ""}
+      ${staffEdit && roles.includes(p.role) ? `<label class="f"><span>Rolle</span><select name="role">${roles.map(r => `<option value="${r}" ${r === p.role ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select>
+        <div class="hint">Trainer können fast alles: freischalten, Rollen Athlet/Trainer, Pläne, Termine, Absagegründe. Admins zusätzlich: Admin-Rechte vergeben, Backup und Feedback zur App. Admins sind für Athleten unsichtbar.</div></label>` : ""}
+      ${staffEdit && p.role !== "athlete" ? `<label class="opt"><input type="checkbox" name="trains" ${trainsP(p) ? "checked" : ""}><span><b>Trainiert selbst mit</b><span class="small muted">Zu-/Absagen, Tests und Statistik wie bei Athleten.</span></span></label>` : ""}
       ${staffEdit && !self ? `<label class="opt"><input type="checkbox" name="approved" ${p.approved ? "checked" : ""}><span><b>Zugang aktiv</b><span class="small muted">Ohne Haken kann sich die Person zwar anmelden, sieht aber nichts.</span></span></label>` : ""}
       <div class="btns"><button type="button" class="btn ghost" data-act="closeSheet">Abbrechen</button><button class="btn">Speichern</button></div>
     </form>
@@ -2548,7 +2581,7 @@ const forms = {
   },
   async regauto(f) {
     const mode = (f.querySelector("[name=mode]:checked") || {}).value;
-    const v = mode === "manual" ? null : { dow: Number(mode), time: f.time.value || "18:00" };
+    const v = mode === "manual" ? null : { dow: Number(f.dow.value) || 7, time: f.time.value || "18:00" };
     S.settings = await S.be.updateSettings({ registration_auto: v }); render(); toast("Gespeichert");
   },
   async teamname(f) { S.settings = await S.be.updateSettings({ team_name: f.name.value.trim() }); render(); toast("Gespeichert"); },
@@ -2562,7 +2595,7 @@ const forms = {
     const name = f.name.value.trim(); if (name !== p.display_name) patch.display_name = name;
     if (f.group) { const g = f.group.value || null; if (g !== p.plan_group_id) patch.plan_group_id = g; }
     if (f.role && f.role.value !== p.role) {
-      if (id === S.me.id && f.role.value !== "admin" && !await ask("Eigene Admin-Rechte abgeben?", "Du kannst sie dir danach nicht selbst zurückgeben.", "Abgeben", true)) return;
+      if (id === S.me.id && !await ask(`Eigene ${ROLE_LABEL[p.role]}-Rechte abgeben?`, "Du kannst sie dir danach nicht selbst zurückgeben.", "Abgeben", true)) return;
       patch.role = f.role.value;
     }
     if (f.approved && f.approved.checked !== p.approved) patch.approved = f.approved.checked;
